@@ -16,7 +16,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
  */
 async function resolveJWT(token: string): Promise<AuthenticationResult> {
   try {
-    const payload = await verify(token, JWT_SECRET);
+    const payload = await verify(token, JWT_SECRET, "HS256") as any;
 
     return {
       authenticated: true,

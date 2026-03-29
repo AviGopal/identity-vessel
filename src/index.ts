@@ -17,7 +17,12 @@ import type { AuthContext } from './types';
 
 const PORT = parseInt(process.env.PORT || '8080');
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
-const app = new Hono();
+
+type Variables = {
+  auth: AuthContext;
+};
+
+const app = new Hono<{ Variables: Variables }>();
 
 // Middleware
 app.use('*', logger());
@@ -122,7 +127,7 @@ app.post('/v1/auth/login', async (c) => {
     const db = await getSurrealDB();
 
     // Query user by email
-    const users = await db.query(`
+    const users = await db.query<any[]>(`
       SELECT * FROM users
       WHERE email = $email
       LIMIT 1
@@ -135,17 +140,17 @@ app.post('/v1/auth/login', async (c) => {
       }, 401);
     }
 
-    const user = users[0][0];
+    const user = users[0][0] as any;
 
     // Verify password using SurrealDB's Argon2 compare
-    const valid = await db.query(`
+    const valid = await db.query<boolean[]>(`
       RETURN crypto::argon2::compare($hash, $password)
     `, {
       hash: user.password_hash,
       password
     });
 
-    if (!valid[0]) {
+    if (!(valid[0] as boolean)) {
       return c.json({
         success: false,
         error: 'Invalid credentials'
@@ -153,7 +158,7 @@ app.post('/v1/auth/login', async (c) => {
     }
 
     // Generate JWT session token (15 min expiry)
-    const token = await sign({
+    const token = await sign({ alg: "HS256",
       userId: user.id,
       orgId: user.org_id,
       email: user.email,
@@ -195,12 +200,12 @@ app.post('/v1/auth/signup', async (c) => {
     const db = await getSurrealDB();
 
     // Hash password using SurrealDB's Argon2
-    const passwordHash = await db.query(`
+    const passwordHash = await db.query<string[]>(`
       RETURN crypto::argon2::generate($password)
     `, { password });
 
     // Create organization
-    const org = await db.query(`
+    const org = await db.query<any[]>(`
       CREATE organizations SET
         name = $orgName,
         created_at = time::now()
@@ -214,8 +219,10 @@ app.post('/v1/auth/signup', async (c) => {
       }, 500);
     }
 
+    const orgData = org[0] as any;
+
     // Create user
-    const user = await db.query(`
+    const user = await db.query<any[]>(`
       CREATE users SET
         email = $email,
         password_hash = $passwordHash,
@@ -227,7 +234,7 @@ app.post('/v1/auth/signup', async (c) => {
       email,
       passwordHash: passwordHash[0],
       name,
-      orgId: org[0].id
+      orgId: orgData.id
     });
 
     if (!user || user[0].length === 0) {
@@ -237,12 +244,12 @@ app.post('/v1/auth/signup', async (c) => {
       }, 500);
     }
 
-    const newUser = user[0][0];
+    const newUser = user[0][0] as any;
 
     // Generate JWT session token (15 min expiry)
-    const token = await sign({
+    const token = await sign({ alg: "HS256",
       userId: newUser.id,
-      orgId: org[0].id,
+      orgId: orgData.id,
       email,
       type: 'session',
       exp: Math.floor(Date.now() / 1000) + (15 * 60)
@@ -280,7 +287,7 @@ app.get('/v1/auth/me', async (c) => {
 
     const token = authHeader.slice(7);
 
-    const payload = await verify(token, JWT_SECRET);
+    const payload = await verify(token, JWT_SECRET, "HS256") as any;
 
     return c.json({
       success: true,

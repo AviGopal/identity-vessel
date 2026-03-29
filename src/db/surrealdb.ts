@@ -27,10 +27,13 @@ export async function getSurrealDB(): Promise<Surreal> {
 
     await db.connect(SURREALDB_URL);
 
-    await db.signin({
-      username: SURREALDB_USERNAME,
-      password: SURREALDB_PASSWORD
-    });
+    // Only signin if credentials are provided (SurrealDB might have auth disabled)
+    if (SURREALDB_USERNAME && SURREALDB_PASSWORD && SURREALDB_USERNAME !== 'none') {
+      await db.signin({
+        username: SURREALDB_USERNAME,
+        password: SURREALDB_PASSWORD
+      });
+    }
 
     await db.use({
       namespace: SURREALDB_NAMESPACE,
