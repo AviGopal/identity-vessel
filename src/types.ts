@@ -40,8 +40,8 @@ export interface ValidationResult {
 export interface AuthContext {
   orgId: string;
   userId: string;
-  keyId: string;
-  type: 'api_key';
+  keyId?: string;
+  type: 'api_key' | 'session';
   scopes: string[];
 }
 
@@ -64,8 +64,9 @@ export interface KeyGenerationResult {
 export interface AuthenticationImpulse {
   type: 'authentication';
   pointer: {
-    type: 'apiKey';
-    apiKey: string;
+    type: 'apiKey' | 'session';
+    apiKey?: string;
+    token?: string;
   };
   budget?: number;
   priority?: 'high' | 'medium' | 'low';
@@ -77,6 +78,7 @@ export interface AuthenticationResult {
   orgId?: string;
   userId?: string;
   keyId?: string;
+  type?: 'api_key' | 'session';
   scopes?: string[];
   reason?: string;
 }

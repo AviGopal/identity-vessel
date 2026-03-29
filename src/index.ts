@@ -6,14 +6,17 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
+import { sign, verify } from 'hono/jwt';
 import { apiKeyAuthMiddleware, requireScopes } from './middleware/apiKeyAuth';
 import { generateApiKey, generateKeyMetadata } from './services/keyGeneration';
 import { resolveAuthentication } from './resolvers/auth';
 import { revokeKey, unrevokeKey } from './db/redis';
+import { getSurrealDB, query } from './db/surrealdb';
 import { z } from 'zod';
 import type { AuthContext } from './types';
 
 const PORT = parseInt(process.env.PORT || '8080');
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 const app = new Hono();
 
 // Middleware
@@ -49,13 +52,16 @@ app.get('/capabilities', (c) => {
     resolvers: [
       {
         type: 'authentication',
-        description: 'Validates API keys with HMAC signatures',
+        description: 'Validates API keys (HMAC) and JWT session tokens',
         avgLatency: 2,
         cost: 0.0001
       }
     ],
     endpoints: [
-      'POST /v1/auth/resolve - Resolve authentication impulse',
+      'POST /v1/auth/resolve - Resolve authentication impulse (JWT or API key)',
+      'POST /v1/auth/login - Login with email/password',
+      'POST /v1/auth/signup - Create user and organization',
+      'GET /v1/auth/me - Get current user from JWT',
       'POST /v1/keys/generate - Generate new API key (authenticated)',
       'POST /v1/keys/revoke - Revoke API key (authenticated)',
       'GET /v1/keys - List API keys (authenticated)'
@@ -81,9 +87,9 @@ app.post('/v1/auth/resolve', async (c) => {
   try {
     const body = await c.req.json();
     const { impulse } = resolveSchema.parse(body);
-    
+
     const result = await resolveAuthentication(impulse);
-    
+
     return c.json({
       success: true,
       data: result
@@ -96,6 +102,199 @@ app.post('/v1/auth/resolve', async (c) => {
         message: error instanceof Error ? error.message : 'Unknown error'
       }
     }, 400);
+  }
+});
+
+// ============================================================================
+// Username/Password Authentication Endpoints
+// ============================================================================
+
+const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(1)
+});
+
+app.post('/v1/auth/login', async (c) => {
+  try {
+    const body = await c.req.json();
+    const { email, password } = loginSchema.parse(body);
+
+    const db = await getSurrealDB();
+
+    // Query user by email
+    const users = await db.query(`
+      SELECT * FROM users
+      WHERE email = $email
+      LIMIT 1
+    `, { email });
+
+    if (!users || users[0].length === 0) {
+      return c.json({
+        success: false,
+        error: 'Invalid credentials'
+      }, 401);
+    }
+
+    const user = users[0][0];
+
+    // Verify password using SurrealDB's Argon2 compare
+    const valid = await db.query(`
+      RETURN crypto::argon2::compare($hash, $password)
+    `, {
+      hash: user.password_hash,
+      password
+    });
+
+    if (!valid[0]) {
+      return c.json({
+        success: false,
+        error: 'Invalid credentials'
+      }, 401);
+    }
+
+    // Generate JWT session token (15 min expiry)
+    const token = await sign({
+      userId: user.id,
+      orgId: user.org_id,
+      email: user.email,
+      type: 'session',
+      exp: Math.floor(Date.now() / 1000) + (15 * 60)
+    }, JWT_SECRET);
+
+    return c.json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        orgId: user.org_id
+      }
+    });
+  } catch (error) {
+    console.error('[Login] Error:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Login failed'
+    }, 500);
+  }
+});
+
+const signupSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8),
+  name: z.string().min(1),
+  orgName: z.string().min(1)
+});
+
+app.post('/v1/auth/signup', async (c) => {
+  try {
+    const body = await c.req.json();
+    const { email, password, name, orgName } = signupSchema.parse(body);
+
+    const db = await getSurrealDB();
+
+    // Hash password using SurrealDB's Argon2
+    const passwordHash = await db.query(`
+      RETURN crypto::argon2::generate($password)
+    `, { password });
+
+    // Create organization
+    const org = await db.query(`
+      CREATE organizations SET
+        name = $orgName,
+        created_at = time::now()
+      RETURN id
+    `, { orgName });
+
+    if (!org || org[0].length === 0) {
+      return c.json({
+        success: false,
+        error: 'Failed to create organization'
+      }, 500);
+    }
+
+    // Create user
+    const user = await db.query(`
+      CREATE users SET
+        email = $email,
+        password_hash = $passwordHash,
+        name = $name,
+        org_id = $orgId,
+        created_at = time::now()
+      RETURN *
+    `, {
+      email,
+      passwordHash: passwordHash[0],
+      name,
+      orgId: org[0].id
+    });
+
+    if (!user || user[0].length === 0) {
+      return c.json({
+        success: false,
+        error: 'Failed to create user'
+      }, 500);
+    }
+
+    const newUser = user[0][0];
+
+    // Generate JWT session token (15 min expiry)
+    const token = await sign({
+      userId: newUser.id,
+      orgId: org[0].id,
+      email,
+      type: 'session',
+      exp: Math.floor(Date.now() / 1000) + (15 * 60)
+    }, JWT_SECRET);
+
+    return c.json({
+      success: true,
+      token,
+      user: {
+        id: newUser.id,
+        email,
+        name,
+        orgId: org[0].id
+      }
+    });
+  } catch (error) {
+    console.error('[Signup] Error:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Signup failed'
+    }, 500);
+  }
+});
+
+app.get('/v1/auth/me', async (c) => {
+  try {
+    const authHeader = c.req.header('Authorization');
+
+    if (!authHeader?.startsWith('Bearer ')) {
+      return c.json({
+        success: false,
+        error: 'Missing Authorization header'
+      }, 401);
+    }
+
+    const token = authHeader.slice(7);
+
+    const payload = await verify(token, JWT_SECRET);
+
+    return c.json({
+      success: true,
+      user: {
+        id: payload.userId,
+        email: payload.email,
+        orgId: payload.orgId
+      }
+    });
+  } catch (error) {
+    return c.json({
+      success: false,
+      error: 'Invalid or expired token'
+    }, 401);
   }
 });
 
