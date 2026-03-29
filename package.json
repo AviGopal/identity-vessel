@@ -1,0 +1,22 @@
+{
+  "name": "metabob-identity-vessel",
+  "version": "0.1.0",
+  "description": "Lightweight authentication vessel with HMAC-based API keys",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun --hot src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.6.14",
+    "ioredis": "^5.4.1",
+    "nanoid": "^5.0.9",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "typescript": "^5.7.2"
+  }
+}
