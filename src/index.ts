@@ -81,10 +81,16 @@ app.get('/capabilities', (c) => {
 const resolveSchema = z.object({
   impulse: z.object({
     type: z.literal('authentication'),
-    pointer: z.object({
-      type: z.literal('apiKey'),
-      apiKey: z.string()
-    })
+    pointer: z.union([
+      z.object({
+        type: z.literal('apiKey'),
+        apiKey: z.string()
+      }),
+      z.object({
+        type: z.literal('session'),
+        token: z.string()
+      })
+    ])
   })
 });
 

@@ -7,8 +7,8 @@ import Surreal from 'surrealdb';
 const SURREALDB_URL = process.env.SURREALDB_URL || 'http://surrealdb.activity-system.svc.cluster.local:8000';
 const SURREALDB_NAMESPACE = process.env.SURREALDB_NAMESPACE || 'activity-system';
 const SURREALDB_DATABASE = process.env.SURREALDB_DATABASE || 'learning_loop';
-const SURREALDB_USERNAME = process.env.SURREALDB_USERNAME || 'root';
-const SURREALDB_PASSWORD = process.env.SURREALDB_PASSWORD || 'root';
+const SURREALDB_USERNAME = process.env.SURREALDB_USERNAME || '';
+const SURREALDB_PASSWORD = process.env.SURREALDB_PASSWORD || '';
 
 let db: Surreal | null = null;
 
