@@ -1,0 +1,15 @@
+{
+  "keyId": "key_aMP4Zy8U08q2xqwX",
+  "prefix": "mb_test",
+  "orgId": "metabob_com",
+  "userId": "usr_admin",
+  "scopes": [
+    "read",
+    "write",
+    "admin"
+  ],
+  "environment": "development",
+  "createdAt": "2026-03-29T16:03:03.490Z",
+  "expiresAt": "2036-03-26T16:03:03.490Z",
+  "note": "Bootstrap admin key - DO NOT DELETE"
+}

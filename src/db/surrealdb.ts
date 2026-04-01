@@ -2,7 +2,7 @@
  * SurrealDB connection for user/org storage
  */
 
-import Surreal from 'surrealdb';
+import { Surreal } from 'surrealdb';
 
 const SURREALDB_URL = process.env.SURREALDB_URL || 'http://surrealdb.activity-system.svc.cluster.local:8000';
 const SURREALDB_NAMESPACE = process.env.SURREALDB_NAMESPACE || 'activity-system';
@@ -27,18 +27,20 @@ export async function getSurrealDB(): Promise<Surreal> {
 
     await db.connect(SURREALDB_URL);
 
+    // SurrealDB v3.0.0: Use namespace/database BEFORE signin
+    await db.use({
+      namespace: SURREALDB_NAMESPACE,
+      database: SURREALDB_DATABASE
+    });
+
     // Only signin if credentials are provided (SurrealDB might have auth disabled)
     if (SURREALDB_USERNAME && SURREALDB_PASSWORD && SURREALDB_USERNAME !== 'none') {
       await db.signin({
         username: SURREALDB_USERNAME,
         password: SURREALDB_PASSWORD
       });
+      console.log('[SurrealDB] Signed in as root user');
     }
-
-    await db.use({
-      namespace: SURREALDB_NAMESPACE,
-      database: SURREALDB_DATABASE
-    });
 
     console.log('[SurrealDB] Connected successfully');
 
