@@ -3,12 +3,7 @@
  */
 
 import { Surreal } from 'surrealdb';
-
-const SURREALDB_URL = process.env.SURREALDB_URL || 'http://surrealdb.activity-system.svc.cluster.local:8000';
-const SURREALDB_NAMESPACE = process.env.SURREALDB_NAMESPACE || 'activity-system';
-const SURREALDB_DATABASE = process.env.SURREALDB_DATABASE || 'learning_loop';
-const SURREALDB_USERNAME = process.env.SURREALDB_USERNAME || '';
-const SURREALDB_PASSWORD = process.env.SURREALDB_PASSWORD || '';
+import { config } from '../services/config';
 
 let db: Surreal | null = null;
 
@@ -23,21 +18,21 @@ export async function getSurrealDB(): Promise<Surreal> {
   try {
     db = new Surreal();
 
-    console.log(`[SurrealDB] Connecting to ${SURREALDB_URL}...`);
+    console.log(`[SurrealDB] Connecting to ${config.surrealdb.url}...`);
 
-    await db.connect(SURREALDB_URL);
+    await db.connect(config.surrealdb.url);
 
     // SurrealDB v3.0.0: Use namespace/database BEFORE signin
     await db.use({
-      namespace: SURREALDB_NAMESPACE,
-      database: SURREALDB_DATABASE
+      namespace: config.surrealdb.namespace,
+      database: config.surrealdb.database
     });
 
     // Only signin if credentials are provided (SurrealDB might have auth disabled)
-    if (SURREALDB_USERNAME && SURREALDB_PASSWORD && SURREALDB_USERNAME !== 'none') {
+    if (config.surrealdb.username && config.surrealdb.password && config.surrealdb.username !== 'none') {
       await db.signin({
-        username: SURREALDB_USERNAME,
-        password: SURREALDB_PASSWORD
+        username: config.surrealdb.username,
+        password: config.surrealdb.password
       });
       console.log('[SurrealDB] Signed in as root user');
     }

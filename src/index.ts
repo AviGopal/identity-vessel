@@ -10,9 +10,9 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { resolveAuthentication } from './resolvers/auth';
+import { authenticateMiniBobInstance, handleAuthError } from './services/minibob-auth';
+import { config } from './services/config';
 import { z } from 'zod';
-
-const PORT = parseInt(process.env.PORT || '8080');
 
 const app = new Hono();
 
@@ -121,79 +121,30 @@ app.post('/v1/auth/minibob/signin', async (c) => {
     const body = await c.req.json();
     const { instance_id, api_key } = minibobSigninSchema.parse(body);
 
-    // Create a fresh SurrealDB connection for RECORD auth
-    const { Surreal } = await import('surrealdb');
-    const db = new Surreal();
-
-    const SURREALDB_URL = process.env.SURREALDB_URL || 'http://surrealdb.activity-system.svc.cluster.local:8000';
-    const SURREALDB_NAMESPACE = process.env.SURREALDB_NAMESPACE || 'activity-system';
-    const SURREALDB_DATABASE = process.env.SURREALDB_DATABASE || 'learning_loop';
-
-    await db.connect(SURREALDB_URL);
-    await db.use({
-      namespace: SURREALDB_NAMESPACE,
-      database: SURREALDB_DATABASE
-    });
-
-    // Authenticate using RECORD access (same as activity-api)
-    // This verifies API key hash and returns a SurrealDB JWT token
-    const authResult = await db.signin({
-      access: 'minibob_record',
-      variables: {
-        instance_id,
-        api_key,
-      },
-    });
-
-    // SurrealDB SDK v2+ returns token as string or { access: "JWT..." }
-    const jwtToken = typeof authResult === 'string'
-      ? authResult
-      : (authResult as { access: string }).access;
-
-    // Query $auth to get org_id from authenticated session
-    const authQuery = await db.query<[{
-      org_id: string;
-      project_id?: string;
-    }]>(
-      `RETURN {
-        org_id: $auth.org_id,
-        project_id: $auth.project_id
-      }`
-    );
-    const instance = authQuery[0] || {};
-
-    await db.close();
+    const result = await authenticateMiniBobInstance(instance_id, api_key);
 
     console.log('[MiniBob Signin] Success:', {
       instance_id,
-      org_id: instance.org_id,
+      org_id: result.org_id,
     });
 
-    // org_id is already a string from minibob_instance schema - no conversion needed
     return c.json({
       success: true,
-      token: jwtToken,
-      org_id: instance.org_id,
+      token: result.token,
+      org_id: result.org_id,
     });
   } catch (error) {
     console.error('[MiniBob Signin] Error:', error);
 
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    const { statusCode, message } = handleAuthError(error);
 
-    // Handle auth-specific errors
-    if (errorMessage.includes('No access method found') ||
-        errorMessage.includes('credentials were invalid') ||
-        errorMessage.includes('Invalid credentials')) {
-      return c.json({
+    return c.json(
+      {
         success: false,
-        error: 'Invalid instance credentials'
-      }, 401);
-    }
-
-    return c.json({
-      success: false,
-      error: errorMessage
-    }, 500);
+        error: message
+      },
+      statusCode as 401 | 500
+    );
   }
 });
 
@@ -203,81 +154,33 @@ app.post('/v2/auth/minibob/signin', async (c) => {
     const body = await c.req.json();
     const { instance_id, api_key } = minibobSigninSchema.parse(body);
 
-    // Create a fresh SurrealDB connection for RECORD auth
-    const { Surreal } = await import('surrealdb');
-    const db = new Surreal();
-
-    const SURREALDB_URL = process.env.SURREALDB_URL || 'http://surrealdb.activity-system.svc.cluster.local:8000';
-    const SURREALDB_NAMESPACE = process.env.SURREALDB_NAMESPACE || 'activity-system';
-    const SURREALDB_DATABASE = process.env.SURREALDB_DATABASE || 'learning_loop';
-
-    await db.connect(SURREALDB_URL);
-    await db.use({
-      namespace: SURREALDB_NAMESPACE,
-      database: SURREALDB_DATABASE
-    });
-
-    // Authenticate using RECORD access (same as activity-api)
-    // This verifies API key hash and returns a SurrealDB JWT token
-    const authResult = await db.signin({
-      access: 'minibob_record',
-      variables: {
-        instance_id,
-        api_key,
-      },
-    });
-
-    // SurrealDB SDK v2+ returns token as string or { access: "JWT..." }
-    const jwtToken = typeof authResult === 'string'
-      ? authResult
-      : (authResult as { access: string }).access;
-
-    // Query $auth to get org_id and project_id from authenticated session
-    const authQuery = await db.query<[{
-      org_id: string;
-      project_id?: string;
-    }]>(
-      `RETURN {
-        org_id: $auth.org_id,
-        project_id: $auth.project_id
-      }`
-    );
-    const instance = authQuery[0] || {};
-
-    await db.close();
+    const result = await authenticateMiniBobInstance(instance_id, api_key);
 
     console.log('[MiniBob Signin v2] Success:', {
       instance_id,
-      org_id: instance.org_id,
-      project_id: instance.project_id,
+      org_id: result.org_id,
+      project_id: result.project_id,
     });
 
     // Return response with org_id and project_id (if available)
     return c.json({
       success: true,
-      token: jwtToken,
-      org_id: instance.org_id,
-      project_id: instance.project_id,
+      token: result.token,
+      org_id: result.org_id,
+      project_id: result.project_id,
     });
   } catch (error) {
     console.error('[MiniBob Signin v2] Error:', error);
 
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    const { statusCode, message } = handleAuthError(error);
 
-    // Handle auth-specific errors
-    if (errorMessage.includes('No access method found') ||
-        errorMessage.includes('credentials were invalid') ||
-        errorMessage.includes('Invalid credentials')) {
-      return c.json({
+    return c.json(
+      {
         success: false,
-        error: 'Invalid instance credentials'
-      }, 401);
-    }
-
-    return c.json({
-      success: false,
-      error: errorMessage
-    }, 500);
+        error: message
+      },
+      statusCode as 401 | 500
+    );
   }
 });
 
@@ -307,9 +210,9 @@ app.post('/v2/auth/minibob/signin', async (c) => {
 // Start Server
 // ============================================================================
 
-console.log('[IdentityVessel] Starting server on port ' + PORT);
+console.log('[IdentityVessel] Starting server on port ' + config.port);
 
 export default {
-  port: PORT,
+  port: config.port,
   fetch: app.fetch
 };

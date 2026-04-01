@@ -82,3 +82,74 @@ export interface AuthenticationResult {
   scopes?: string[];
   reason?: string;
 }
+
+// Cost Tracking Types
+
+// Activity Cost (per-execution cost record)
+export interface ActivityCost {
+  execution_id: string;
+  org_id: string;
+  user_id: string;
+  api_key_id: string;
+  project_id?: string;
+  goal_description?: string;
+  activity_template_id: string;
+  instance_id: string;
+  cost_usd: number;
+  llm_tokens_used: number;
+  llm_cost_usd: number;
+  duration_ms: number;
+  status: 'completed' | 'failed';
+  started_at: string;
+  completed_at: string;
+}
+
+// Cost Summary (aggregated costs)
+export interface CostSummary {
+  org_id: string;
+  period_start: string;
+  period_end: string;
+  granularity: 'hour' | 'day' | 'week' | 'month';
+  project_id?: string;
+  goal_pattern?: string;
+  total_executions: number;
+  successful_executions: number;
+  failed_executions: number;
+  total_cost_usd: number;
+  total_llm_tokens: number;
+  total_llm_cost_usd: number;
+  updated_at: string;
+}
+
+// Cost Record Request
+export interface CostRecordRequest {
+  execution_id: string;
+  api_key_id: string;
+  project_id?: string;
+  goal_description?: string;
+  activity_template_id: string;
+  instance_id: string;
+  cost_usd: number;
+  llm_tokens_used: number;
+  llm_cost_usd: number;
+  duration_ms: number;
+  status: 'completed' | 'failed';
+  started_at: string;
+  completed_at: string;
+}
+
+// Cost Query Filters
+export interface CostQueryFilters {
+  start_date?: string;
+  end_date?: string;
+  project_id?: string;
+  goal_pattern?: string;
+  granularity?: 'hour' | 'day' | 'week' | 'month';
+}
+
+// MiniBob Authentication Result
+export interface MiniBobAuthResult {
+  token: string;
+  org_id: string;
+  project_id?: string;
+}
