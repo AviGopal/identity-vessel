@@ -76,22 +76,32 @@ async function resolveAPIKey(apiKey: string): Promise<AuthenticationResult> {
 async function _resolveAuthentication(
   impulse: AuthenticationImpulse
 ): Promise<AuthenticationResult> {
-  const token = impulse.pointer.apiKey || impulse.pointer.token;
+  // Use explicit pointer type instead of heuristic detection
+  const pointerType = impulse.pointer.type;
 
-  if (!token) {
+  if (pointerType === 'session') {
+    const token = impulse.pointer.token;
+    if (!token) {
+      return {
+        authenticated: false,
+        reason: 'No session token provided'
+      };
+    }
+    return await resolveJWT(token);
+  } else if (pointerType === 'apiKey') {
+    const apiKey = impulse.pointer.apiKey;
+    if (!apiKey) {
+      return {
+        authenticated: false,
+        reason: 'No API key provided'
+      };
+    }
+    return await resolveAPIKey(apiKey);
+  } else {
     return {
       authenticated: false,
-      reason: 'No authentication token provided'
+      reason: `Unknown authentication type: ${pointerType}`
     };
-  }
-
-  // Detect authentication type
-  if (token.startsWith('eyJ')) {
-    // JWT session token (JWTs start with eyJ when base64-encoded)
-    return await resolveJWT(token);
-  } else {
-    // API key (HMAC-based)
-    return await resolveAPIKey(token);
   }
 }
 

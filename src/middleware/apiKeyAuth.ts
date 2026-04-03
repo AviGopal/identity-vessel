@@ -11,22 +11,41 @@ import type { AuthContext } from '../types';
 /**
  * API key authentication middleware
  * Validates format, signature, and revocation status
+ *
+ * Supports two Authorization header formats:
+ * - ApiKey <key>: Explicit API key format (preferred)
+ * - Bearer <key>: Legacy format (for backward compatibility)
  */
 export async function apiKeyAuthMiddleware(c: Context, next: Next) {
   const authHeader = c.req.header('Authorization');
-  
+
   // Fast path 1: Missing header (~1μs)
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (!authHeader) {
     return c.json({
       error: {
         code: 'MISSING_AUTH_HEADER',
-        message: 'Missing or invalid Authorization header',
-        suggestion: 'Include "Authorization: Bearer <api_key>" header'
+        message: 'Missing Authorization header',
+        suggestion: 'Include "Authorization: ApiKey <api_key>" header'
       }
     }, 401);
   }
 
-  const apiKey = authHeader.slice(7); // Remove 'Bearer '
+  // Parse Authorization header - support both ApiKey and Bearer prefixes
+  let apiKey: string;
+  if (authHeader.startsWith('ApiKey ')) {
+    apiKey = authHeader.slice(7); // Remove 'ApiKey '
+  } else if (authHeader.startsWith('Bearer ')) {
+    // Legacy support - Bearer prefix for backward compatibility
+    apiKey = authHeader.slice(7); // Remove 'Bearer '
+  } else {
+    return c.json({
+      error: {
+        code: 'INVALID_AUTH_SCHEME',
+        message: 'Invalid Authorization scheme',
+        suggestion: 'Use "Authorization: ApiKey <api_key>" format'
+      }
+    }, 401);
+  }
   
   // Fast path 2: Validate format and HMAC signature (~10μs)
   const validation = validateKeyFormat(apiKey);
