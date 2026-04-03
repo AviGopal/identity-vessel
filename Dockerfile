@@ -3,14 +3,14 @@
 ARG BUILD_SHA
 ARG BUILD_VERSION
 
-FROM oven/bun:1.1.45 AS build
+FROM oven/bun:1.2 AS build
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 COPY src ./src
 COPY tsconfig.json ./
 
-FROM oven/bun:1.1.45-slim AS runtime
+FROM oven/bun:1.2-slim AS runtime
 WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/src ./src
