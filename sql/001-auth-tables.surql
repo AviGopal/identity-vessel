@@ -1,84 +1,89 @@
 -- =============================================================================
--- Identity Vessel: Authentication Tables
+-- Identity Vessel: Authentication Reference
 -- =============================================================================
-
+--
+-- IMPORTANT: identity-vessel is STATELESS
+--
+-- This vessel validates authentication tokens and API keys but does NOT own
+-- any database tables. All table schemas are defined and owned by user-vessel.
+--
+-- identity-vessel READS from the following tables (owned by user-vessel):
+--
 -- =============================================================================
--- Table: organizations
+-- Table: organizations (owned by user-vessel/sql/schema/001-organizations.surql)
 -- =============================================================================
-
-DEFINE TABLE IF NOT EXISTS organizations SCHEMAFULL;
-
-DEFINE FIELD IF NOT EXISTS name ON organizations TYPE string
-  ASSERT $value != NONE;
-
-DEFINE FIELD IF NOT EXISTS created_at ON organizations TYPE datetime
-  VALUE $value OR time::now();
-
-DEFINE FIELD IF NOT EXISTS updated_at ON organizations TYPE datetime
-  VALUE $value OR time::now();
-
+-- Used for: Validating org_id claims in JWT tokens
+-- Key fields read:
+--   - id: Organization record ID
+--   - org_id: String identifier for the organization
+--   - name: Organization display name
+--   - subscription_tier: Determines API limits and features
+--   - seat_limit: Maximum number of users allowed
+--   - seat_usage: Current number of active users
+--
 -- =============================================================================
--- Table: users
+-- Table: users (owned by user-vessel/sql/schema/002-users.surql)
 -- =============================================================================
-
-DEFINE TABLE IF NOT EXISTS users SCHEMAFULL;
-
-DEFINE FIELD IF NOT EXISTS email ON users TYPE string
-  ASSERT $value != NONE;
-
-DEFINE FIELD IF NOT EXISTS name ON users TYPE option<string>;
-
-DEFINE FIELD IF NOT EXISTS org_id ON users TYPE string
-  ASSERT $value != NONE
-  COMMENT "Organization ID (string reference, not RECORD)";
-
-DEFINE FIELD IF NOT EXISTS password_hash ON users TYPE option<string>
-  COMMENT "Argon2 hash of password (optional for OAuth users)";
-
-DEFINE FIELD IF NOT EXISTS created_at ON users TYPE datetime
-  VALUE $value OR time::now();
-
-DEFINE FIELD IF NOT EXISTS updated_at ON users TYPE datetime
-  VALUE $value OR time::now();
-
--- Unique constraint on email
-DEFINE INDEX IF NOT EXISTS idx_users_email
-  ON users FIELDS email UNIQUE;
-
+-- Used for: Password authentication, user lookup, JWT claim population
+-- Key fields read:
+--   - id: User record ID
+--   - email: For login and identification
+--   - password_hash: Argon2 hash for password verification
+--   - org_id: Organization membership
+--   - role: User's role (owner, admin, member)
+--   - is_active: Whether user can authenticate
+--   - email_verified: For verification checks
+--
 -- =============================================================================
--- Table: api_keys (metadata for HMAC-based keys)
+-- Table: api_keys (owned by user-vessel)
 -- =============================================================================
-
-DEFINE TABLE IF NOT EXISTS api_keys SCHEMAFULL;
-
-DEFINE FIELD IF NOT EXISTS key_id ON api_keys TYPE string
-  ASSERT $value != NONE
-  COMMENT "Unique key identifier (embedded in HMAC key)";
-
-DEFINE FIELD IF NOT EXISTS org_id ON api_keys TYPE string
-  ASSERT $value != NONE;
-
-DEFINE FIELD IF NOT EXISTS user_id ON api_keys TYPE string
-  ASSERT $value != NONE;
-
-DEFINE FIELD IF NOT EXISTS name ON api_keys TYPE option<string>
-  COMMENT "User-provided key name";
-
-DEFINE FIELD IF NOT EXISTS scopes ON api_keys TYPE array
-  DEFAULT ["read", "write"];
-
-DEFINE FIELD IF NOT EXISTS revoked ON api_keys TYPE bool
-  DEFAULT false;
-
-DEFINE FIELD IF NOT EXISTS created_at ON api_keys TYPE datetime
-  VALUE $value OR time::now();
-
-DEFINE FIELD IF NOT EXISTS last_used_at ON api_keys TYPE option<datetime>;
-
--- Unique constraint on key_id
-DEFINE INDEX IF NOT EXISTS idx_api_keys_key_id
-  ON api_keys FIELDS key_id UNIQUE;
-
--- Index for revocation lookups
-DEFINE INDEX IF NOT EXISTS idx_api_keys_revoked
-  ON api_keys FIELDS revoked, key_id;
+-- Used for: HMAC-based API key validation
+-- Key fields read:
+--   - key_id: Unique identifier embedded in HMAC key
+--   - org_id: Organization the key belongs to
+--   - user_id: User who created the key
+--   - scopes: Permissions granted to the key
+--   - revoked: Whether key has been revoked
+--   - status: Key status (active, revoked, expired)
+--
+-- =============================================================================
+-- Table: minibob_instance (owned by user-vessel)
+-- =============================================================================
+-- Used for: MiniBob instance authentication
+-- Key fields read:
+--   - instance_id: Unique instance identifier
+--   - org_id: Organization the instance belongs to
+--   - api_key: API key for authentication
+--   - status: Instance status
+--
+-- =============================================================================
+-- Authentication Flow
+-- =============================================================================
+--
+-- 1. User/Password Auth:
+--    - identity-vessel queries users table by email
+--    - Verifies password_hash using crypto::argon2::compare
+--    - Issues JWT with claims: { sub, org_id, role, email }
+--    - DOES NOT modify users table (updates like last_login are user-vessel's job)
+--
+-- 2. API Key Auth:
+--    - identity-vessel receives HMAC-signed key
+--    - Extracts key_id from key format
+--    - Queries api_keys table to validate
+--    - Verifies HMAC signature
+--    - Issues short-lived JWT for authenticated requests
+--    - DOES NOT modify api_keys table (last_used_at updates are user-vessel's job)
+--
+-- 3. MiniBob Instance Auth:
+--    - identity-vessel queries minibob_instance by instance_id
+--    - Validates api_key matches
+--    - Issues JWT with instance claims
+--    - DOES NOT modify minibob_instance table
+--
+-- =============================================================================
+-- NO TABLE DEFINITIONS BELOW
+-- =============================================================================
+-- All DEFINE TABLE and DEFINE FIELD statements have been removed.
+-- Table schemas are the responsibility of user-vessel.
+-- identity-vessel only requires READ access to the tables listed above.
+-- =============================================================================
