@@ -23,8 +23,8 @@
  *
  * Authentication Endpoints:
  * - POST /v1/auth/resolve     - Resolve authentication impulse (JWT or API key)
- * - POST /v1/auth/minibob/signin - MiniBob instance authentication
- * - POST /v2/auth/minibob/signin - MiniBob instance authentication (v2 alias)
+ * - POST /v1/auth/minibob/signin - DEPRECATED (returns 410)
+ * - POST /v2/auth/minibob/signin - DEPRECATED (returns 410)
  *
  * For account management (login/signup/password change), use user-vessel.
  */
@@ -33,7 +33,6 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { resolveAuthentication } from './resolvers/auth';
-import { authenticateMiniBobInstance, handleAuthError } from './services/minibob-auth';
 import { generateApiKey, generateKeyMetadata } from './services/keyGeneration';
 import { validateKeyFormat, parseApiKey } from './services/validation';
 import { revokeKey, isKeyRevoked } from './db/redis';
@@ -87,8 +86,8 @@ app.get('/capabilities', (c) => {
       'POST /v1/keys/revoke - Revoke an API key',
       // Authentication
       'POST /v1/auth/resolve - Resolve authentication impulse (JWT or API key)',
-      'POST /v1/auth/minibob/signin - MiniBob instance authentication',
-      'POST /v2/auth/minibob/signin - MiniBob instance authentication (v2 alias)'
+      'POST /v1/auth/minibob/signin - DEPRECATED (returns 410)',
+      'POST /v2/auth/minibob/signin - DEPRECATED (returns 410)'
     ],
     notes: [
       'identity-vessel is the SINGLE SOURCE OF TRUTH for API key operations',
@@ -153,81 +152,72 @@ app.post('/v1/auth/resolve', async (c) => {
 });
 
 // ============================================================================
-// MiniBob Instance Authentication (for autonomous vessels)
+// MiniBob Instance Authentication - DEPRECATED
 // ============================================================================
 
-const minibobSigninSchema = z.object({
-  instance_id: z.string().min(1),
-  api_key: z.string().min(1)
-});
-
+/**
+ * POST /v1/auth/minibob/signin - DEPRECATED
+ *
+ * This endpoint was removed on 2026-04-08 when the minibob_record ACCESS
+ * method was deprecated in migration 052.
+ * MiniBob instances now use standard API key authentication.
+ */
 app.post('/v1/auth/minibob/signin', async (c) => {
-  try {
-    const body = await c.req.json();
-    const { instance_id, api_key } = minibobSigninSchema.parse(body);
+  console.log('[auth] Deprecated endpoint called', {
+    endpoint: '/v1/auth/minibob/signin',
+    ip: c.req.header('x-forwarded-for') || 'unknown'
+  })
 
-    const result = await authenticateMiniBobInstance(instance_id, api_key);
-
-    console.log('[MiniBob Signin] Success:', {
-      instance_id,
-      org_id: result.org_id,
-    });
-
-    return c.json({
-      success: true,
-      token: result.token,
-      org_id: result.org_id,
-    });
-  } catch (error) {
-    console.error('[MiniBob Signin] Error:', error);
-
-    const { statusCode, message } = handleAuthError(error);
-
-    return c.json(
-      {
-        success: false,
-        error: message
+  return c.json({
+    success: false,
+    error: {
+      code: 'ENDPOINT_DEPRECATED',
+      message: 'MiniBob instance authentication has been deprecated',
+      details: {
+        deprecated_since: '2026-04-08',
+        removal_date: '2026-04-08',
+        reason: 'Migration 052 deprecated minibob_record ACCESS method',
+        old_method: 'POST /v1/auth/minibob/signin with instance_id + api_key',
+        new_method: 'Use standard API key authentication with Authorization: ApiKey <key> header',
+        migration_guide: 'All endpoints now accept API key authentication directly. No signin required.',
+        example: 'curl -H "Authorization: ApiKey <your-key>" https://activity.metabob.com/v2/activities/templates'
       },
-      statusCode as 401 | 500
-    );
-  }
-});
+      documentation: 'See CLAUDE.md section on API Key Authentication'
+    }
+  }, 410)
+})
 
-// v2 API alias for consistency with MiniBob bootstrap client
+/**
+ * POST /v2/auth/minibob/signin - DEPRECATED
+ *
+ * This endpoint was removed on 2026-04-08 when the minibob_record ACCESS
+ * method was deprecated in migration 052.
+ * MiniBob instances now use standard API key authentication.
+ */
 app.post('/v2/auth/minibob/signin', async (c) => {
-  try {
-    const body = await c.req.json();
-    const { instance_id, api_key } = minibobSigninSchema.parse(body);
+  console.log('[auth] Deprecated endpoint called', {
+    endpoint: '/v2/auth/minibob/signin',
+    ip: c.req.header('x-forwarded-for') || 'unknown'
+  })
 
-    const result = await authenticateMiniBobInstance(instance_id, api_key);
-
-    console.log('[MiniBob Signin v2] Success:', {
-      instance_id,
-      org_id: result.org_id,
-      project_id: result.project_id,
-    });
-
-    // Return response with org_id and project_id (if available)
-    return c.json({
-      success: true,
-      token: result.token,
-      org_id: result.org_id,
-      project_id: result.project_id,
-    });
-  } catch (error) {
-    console.error('[MiniBob Signin v2] Error:', error);
-
-    const { statusCode, message } = handleAuthError(error);
-
-    return c.json(
-      {
-        success: false,
-        error: message
+  return c.json({
+    success: false,
+    error: {
+      code: 'ENDPOINT_DEPRECATED',
+      message: 'MiniBob instance authentication has been deprecated',
+      details: {
+        deprecated_since: '2026-04-08',
+        removal_date: '2026-04-08',
+        reason: 'Migration 052 deprecated minibob_record ACCESS method',
+        old_method: 'POST /v2/auth/minibob/signin with instance_id + api_key',
+        new_method: 'Use standard API key authentication with Authorization: ApiKey <key> header',
+        migration_guide: 'All endpoints now accept API key authentication directly. No signin required.',
+        example: 'curl -H "Authorization: ApiKey <your-key>" https://activity.metabob.com/v2/activities/templates'
       },
-      statusCode as 401 | 500
-    );
-  }
-});
+      documentation: 'See CLAUDE.md section on API Key Authentication'
+    }
+  }, 410)
+})
 
 // ============================================================================
 // API Key Generation Endpoint (canonical source of truth)

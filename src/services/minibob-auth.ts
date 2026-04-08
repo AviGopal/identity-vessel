@@ -1,6 +1,12 @@
 /**
- * MiniBob instance authentication service
- * Extracted from duplicate logic in v1/v2 endpoints
+ * MiniBob instance authentication service - DEPRECATED
+ *
+ * This file is deprecated as of 2026-04-08.
+ * Migration 052 removed the minibob_record ACCESS method from SurrealDB.
+ * MiniBob instances now use standard API key authentication.
+ *
+ * This file is retained for reference but is no longer called by any endpoints.
+ * The /v1/auth/minibob/signin and /v2/auth/minibob/signin endpoints return 410 Gone.
  */
 
 import { Surreal } from 'surrealdb';
@@ -8,7 +14,11 @@ import { config } from './config';
 import type { MiniBobAuthResult } from '../types';
 
 /**
- * Authenticate MiniBob instance using RECORD access
+ * Authenticate MiniBob instance using RECORD access - DEPRECATED
+ *
+ * @deprecated This function is no longer used. Migration 052 removed the minibob_record ACCESS method.
+ * Use standard API key authentication instead.
+ *
  * Returns JWT token and organization/project context
  */
 export async function authenticateMiniBobInstance(
@@ -66,7 +76,9 @@ export async function authenticateMiniBobInstance(
 }
 
 /**
- * Common error handler for MiniBob authentication
+ * Common error handler for MiniBob authentication - DEPRECATED
+ *
+ * @deprecated This function is no longer used. Endpoints return 410 Gone.
  */
 export function handleAuthError(error: unknown): { statusCode: number; message: string } {
   const errorMessage = error instanceof Error ? error.message : String(error);
