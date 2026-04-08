@@ -126,6 +126,17 @@ app.post('/v1/auth/resolve', async (c) => {
 
     const result = await resolveAuthentication(impulse);
 
+    // Return proper HTTP status based on authentication result
+    if (!result.authenticated) {
+      return c.json({
+        success: false,
+        error: {
+          code: 'AUTHENTICATION_FAILED',
+          message: result.reason || 'Authentication failed'
+        }
+      }, 401);
+    }
+
     return c.json({
       success: true,
       data: result
