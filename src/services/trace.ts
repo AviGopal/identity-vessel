@@ -7,7 +7,9 @@ const ACTIVITY_API_ENDPOINT = process.env.ACTIVITY_API_ENDPOINT || 'http://metab
 
 // Sampling configuration - only send a percentage of traces
 const TRACE_SAMPLE_RATE = parseFloat(process.env.TRACE_SAMPLE_RATE || '0.01'); // 1% by default
-const ALWAYS_TRACE_FAILURES = process.env.ALWAYS_TRACE_FAILURES !== 'false'; // true by default
+// Default behavior: true if env var is not set to literal 'false'
+// Helm deployment sets this to 'false' to reduce DB load from failed auth attempts
+const ALWAYS_TRACE_FAILURES = process.env.ALWAYS_TRACE_FAILURES !== 'false';
 
 /**
  * Decide if we should sample this trace

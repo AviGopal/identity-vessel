@@ -77,7 +77,7 @@ Content-Type: application/json
 }
 ```
 
-Returns:
+Returns (200 OK):
 ```json
 {
   "success": true,
@@ -88,6 +88,17 @@ Returns:
     "keyId": "key_abc123",
     "type": "api_key",
     "scopes": ["read", "write"]
+  }
+}
+```
+
+Returns (401 Unauthorized) if invalid:
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_API_KEY",
+    "message": "Invalid API key format or signature"
   }
 }
 ```
@@ -108,7 +119,9 @@ Content-Type: application/json
 }
 ```
 
-**MiniBob Instance Authentication**
+**MiniBob Instance Authentication (DEPRECATED)**
+
+> **⚠️ DEPRECATED (2026-04-08)**: Use standard API key authentication instead. This endpoint remains for backward compatibility.
 
 Special endpoint for autonomous MiniBob instances to authenticate using their instance ID and API key.
 
@@ -122,7 +135,7 @@ Content-Type: application/json
 }
 ```
 
-Returns:
+Returns (200 OK):
 ```json
 {
   "success": true,
@@ -130,6 +143,19 @@ Returns:
   "org_id": "metabob_internal"
 }
 ```
+
+Returns (401 Unauthorized) if invalid:
+```json
+{
+  "success": false,
+  "error": {
+    "code": "AUTHENTICATION_FAILED",
+    "message": "Invalid instance credentials"
+  }
+}
+```
+
+**Migration Guide**: New MiniBob deployments should use standard API keys with the `Authorization: ApiKey <key>` header instead of this endpoint. See [AUTHENTICATION_TRACE_FIXES.md](../../../../repos/metabob-activity-api/docs/AUTHENTICATION_TRACE_FIXES.md) for details.
 
 ### Removed Endpoints
 
@@ -179,6 +205,12 @@ app.use('/api/*', async (c, next) => {
       }
     })
   });
+
+  // Check HTTP status code first (401 = authentication failed)
+  if (!response.ok) {
+    const { error } = await response.json();
+    return c.json({ error: error?.message || 'Authentication failed' }, 401);
+  }
 
   const result = await response.json();
 
@@ -233,7 +265,37 @@ JWT_SECRET=your-jwt-secret                   # JWT signing secret (required)
 
 # User-vessel integration
 USER_VESSEL_URL=http://user-vessel:8080      # User-vessel API for revocation checks (optional)
+
+# Trace collection and learning
+ACTIVITY_API_ENDPOINT=http://metabob-activity-api.activity-system.svc.cluster.local:8080  # Where traces are sent (default: cluster-local)
+TRACE_SAMPLE_RATE=0.01                       # Sampling rate for successful auth (default: 0.01 = 1%)
+ALWAYS_TRACE_FAILURES=false                  # Whether to trace all failed auth attempts (default: true if unset, false in Helm)
 ```
+
+### Trace Sampling Strategy
+
+Authentication operations send execution traces to the activity API for learning. To reduce database load:
+
+- **Successful authentications**: Sampled at `TRACE_SAMPLE_RATE` (default 1%)
+- **Failed authentications**: Controlled by `ALWAYS_TRACE_FAILURES`
+  - If `true` (default when unset): All failures are traced for debugging
+  - If `false` (Helm production default): Failures are not traced
+
+**Why disable failure tracing in production?**
+
+Failed authentication attempts are often:
+- Brute force attacks with invalid keys
+- Expired tokens from legitimate clients (already logged)
+- Misconfigured clients retrying indefinitely
+
+These generate high-volume, low-value traces that pollute the learning database. In production, we set `ALWAYS_TRACE_FAILURES=false` to avoid trace spam while still capturing a representative sample (1%) of successful operations.
+
+**When to enable failure tracing:**
+- Local development (debugging auth issues)
+- Investigating authentication problems in staging
+- Analyzing attack patterns (temporarily, with external analysis)
+
+Traces are sent asynchronously and fail-open (authentication never blocks on trace collection).
 
 ## Security
 
