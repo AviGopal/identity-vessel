@@ -11,14 +11,12 @@ const VALID_PREFIXES = ['mb_live', 'mb_test'];
 
 /**
  * Parse API key into components
- * Format: Base64(mb_live-<org_id>-<user_id>-<key_id>-<signature>)
- * Using dashes as separators and base64 encoding for style
+ * Format: mb_{env}-{org_id}-{user_id}-{key_id}-{hmac_signature}
+ * Using dashes as separators for clarity
  */
 export function parseApiKey(apiKey: string): ApiKeyComponents | null {
   try {
-    // Decode from base64url
-    const decoded = Buffer.from(apiKey, 'base64url').toString('utf-8');
-    const parts = decoded.split('-');
+    const parts = apiKey.split('-');
 
     // Validate format: prefix + org + user + key + signature = 5 parts
     if (parts.length !== 5) {
@@ -36,7 +34,7 @@ export function parseApiKey(apiKey: string): ApiKeyComponents | null {
     const userId = parts[2];
     const keyId = parts[3];
     const signature = parts[4];
-  
+
     return {
       prefix,
       orgId,
@@ -45,7 +43,7 @@ export function parseApiKey(apiKey: string): ApiKeyComponents | null {
       signature
     };
   } catch (error) {
-    // Invalid base64 or malformed key
+    // Malformed key
     return null;
   }
 }

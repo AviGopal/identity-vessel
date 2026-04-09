@@ -34,10 +34,8 @@ export function generateApiKey(
     .slice(0, 32);
 
   // Construct full API key (using dashes as separators)
-  const rawKey = prefix + '-' + orgId + '-' + userId + '-' + keyId + '-' + signature;
-
-  // Base64 encode for style and URL safety
-  const key = Buffer.from(rawKey).toString('base64url');
+  // Format: mb_{env}-{org}-{user}-{key_id}-{signature}
+  const key = prefix + '-' + orgId + '-' + userId + '-' + keyId + '-' + signature;
 
   // Calculate expiration if specified
   const expiresAt = options.expiresInDays
