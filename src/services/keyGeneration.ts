@@ -3,39 +3,57 @@
  */
 
 import { createHmac } from 'crypto';
-import { nanoid } from 'nanoid';
+import { customAlphabet } from 'nanoid';
 import type { KeyGenerationOptions, KeyGenerationResult } from '../types';
 
 const SECRET_KEY = process.env.API_KEY_SECRET || 'dev-secret-change-in-production';
 
+// Custom nanoid without dashes (dash is our separator)
+// Using: A-Z, a-z, 0-9, _
+const nanoid = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_', 16);
+
 /**
  * Generate a new API key with HMAC signature
- * Format: mb_live-<org_id>-<user_id>-<key_id>-<signature>
- * Using dashes as separators to avoid ambiguity with underscores in IDs
+ *
+ * Format: mb-[base64(signed-payload)]-{signature}
+ * Where signed-payload = {org-id}-{member-id}-{key-id}-{iss}
+ *
+ * Philosophy:
+ * - No stable/unstable dichotomy - all keys are production-ready
+ * - Accept errors for learning, failover to reliable pathways
+ * - Never lose traces, templates, or execution provenance
  */
 export function generateApiKey(
   orgId: string,
   userId: string,
   options: KeyGenerationOptions = {}
 ): KeyGenerationResult {
-  // Generate unique key ID (use alphabet without dashes to avoid ambiguity)
-  const keyId = 'key_' + nanoid(16);
+  // Generate unique key ID (without dashes)
+  const keyId = 'key_' + nanoid();
 
-  // Determine prefix based on environment
-  const prefix = process.env.NODE_ENV === 'production' ? 'mb_live' : 'mb_test';
+  // Issuer - identity vessel endpoint or default
+  const iss = process.env.IDENTITY_ENDPOINT || 'https://identity.metabob.com';
 
-  // Create payload to sign
-  const payload = prefix + '.' + orgId + '.' + userId + '.' + keyId;
+  // Create signed payload: {org-id}-{member-id}-{key-id}-{iss}
+  const signedPayload = `${orgId}-${userId}-${keyId}-${iss}`;
 
-  // Generate HMAC signature
+  // Sign the payload with HMAC
+  const payloadSignature = createHmac('sha256', SECRET_KEY)
+    .update(signedPayload)
+    .digest('hex');
+
+  // Base64 encode the signed payload for transport
+  const encodedPayload = Buffer.from(signedPayload).toString('base64url');
+
+  // Generate final signature over the entire structure
+  const finalPayload = `mb-${encodedPayload}`;
   const signature = createHmac('sha256', SECRET_KEY)
-    .update(payload)
+    .update(finalPayload)
     .digest('hex')
-    .slice(0, 32);
+    .slice(0, 32); // Truncate for reasonable key length
 
-  // Construct full API key (using dashes as separators)
-  // Format: mb_{env}-{org}-{user}-{key_id}-{signature}
-  const key = prefix + '-' + orgId + '-' + userId + '-' + keyId + '-' + signature;
+  // Construct full API key: mb-[base64(signed-payload)]-{signature}
+  const key = `${finalPayload}-${signature}`;
 
   // Calculate expiration if specified
   const expiresAt = options.expiresInDays
@@ -45,7 +63,7 @@ export function generateApiKey(
   return {
     key,
     keyId,
-    prefix,
+    prefix: 'mb', // Always 'mb', no environment distinction
     expiresAt
   };
 }

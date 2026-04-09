@@ -3,11 +3,15 @@
  */
 
 // API Key Components
+// Format: mb-[base64(signed-payload)]-{signature}
+// Where signed-payload = {org-id}-{member-id}-{key-id}-{iss}
 export interface ApiKeyComponents {
-  prefix: 'mb_live' | 'mb_test';
+  prefix: 'mb'; // Always 'mb', no environment distinction
   orgId: string;
   userId: string;
   keyId: string;
+  iss: string; // Issuer (identity-vessel endpoint)
+  encodedPayload: string; // Base64-encoded signed payload
   signature: string;
 }
 

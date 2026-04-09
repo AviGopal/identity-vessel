@@ -7,39 +7,62 @@ import type { ApiKeyComponents, ValidationResult } from '../types';
 
 // Environment configuration
 const SECRET_KEY = process.env.API_KEY_SECRET || 'dev-secret-change-in-production';
-const VALID_PREFIXES = ['mb_live', 'mb_test'];
 
 /**
  * Parse API key into components
- * Format: mb_{env}-{org_id}-{user_id}-{key_id}-{hmac_signature}
- * Using dashes as separators for clarity
+ * Format: mb-[base64(signed-payload)]-{signature}
+ * Where signed-payload = {org-id}-{member-id}-{key-id}-{iss}
  */
 export function parseApiKey(apiKey: string): ApiKeyComponents | null {
   try {
-    const parts = apiKey.split('-');
-
-    // Validate format: prefix + org + user + key + signature = 5 parts
-    if (parts.length !== 5) {
+    // Must start with 'mb-'
+    if (!apiKey.startsWith('mb-')) {
       return null;
     }
 
-    const prefix = parts[0] as 'mb_live' | 'mb_test';
+    // Remove 'mb-' prefix
+    const withoutPrefix = apiKey.substring(3);
 
-    if (!VALID_PREFIXES.includes(prefix)) {
-      return null;
+    // Split on the LAST dash to separate payload from signature
+    // This is important because base64url encoding can contain dashes
+    const lastDashIndex = withoutPrefix.lastIndexOf('-');
+
+    if (lastDashIndex === -1) {
+      return null; // No signature separator found
     }
 
-    // Extract components (no ambiguity since we use dashes as separators)
-    const orgId = parts[1];
-    const userId = parts[2];
-    const keyId = parts[3];
-    const signature = parts[4];
+    const prefix = 'mb';
+    const encodedPayload = withoutPrefix.substring(0, lastDashIndex);
+    const signature = withoutPrefix.substring(lastDashIndex + 1);
+
+    // Decode the base64 payload
+    let signedPayload: string;
+    try {
+      signedPayload = Buffer.from(encodedPayload, 'base64url').toString('utf-8');
+    } catch {
+      return null; // Invalid base64
+    }
+
+    // Parse signed payload: {org-id}-{member-id}-{key-id}-{iss}
+    const payloadParts = signedPayload.split('-');
+
+    if (payloadParts.length < 4) {
+      return null; // Missing required fields
+    }
+
+    // Extract components
+    const orgId = payloadParts[0];
+    const userId = payloadParts[1];
+    const keyId = payloadParts[2];
+    const iss = payloadParts.slice(3).join('-'); // Handle dashes in issuer URL
 
     return {
       prefix,
       orgId,
       userId,
       keyId,
+      iss,
+      encodedPayload,
       signature
     };
   } catch (error) {
@@ -52,25 +75,25 @@ export function parseApiKey(apiKey: string): ApiKeyComponents | null {
  * Verify HMAC signature using constant-time comparison
  */
 export function verifySignature(components: ApiKeyComponents): boolean {
-  const { prefix, orgId, userId, keyId, signature: providedSignature } = components;
-  
-  // Create payload (what was originally signed)
-  const payload = `${prefix}.${orgId}.${userId}.${keyId}`;
-  
+  const { encodedPayload, signature: providedSignature } = components;
+
+  // Reconstruct what was signed: mb-[base64-payload]
+  const finalPayload = `mb-${encodedPayload}`;
+
   // Calculate expected signature
   const expectedSignature = createHmac('sha256', SECRET_KEY)
-    .update(payload)
+    .update(finalPayload)
     .digest('hex')
-    .slice(0, 32); // Truncate to 32 chars for shorter keys
-  
+    .slice(0, 32); // Truncate to 32 chars for reasonable key length
+
   // Constant-time comparison to prevent timing attacks
   const providedBuffer = Buffer.from(providedSignature);
   const expectedBuffer = Buffer.from(expectedSignature);
-  
+
   if (providedBuffer.length !== expectedBuffer.length) {
     return false;
   }
-  
+
   return timingSafeEqual(providedBuffer, expectedBuffer);
 }
 
@@ -79,16 +102,32 @@ export function verifySignature(components: ApiKeyComponents): boolean {
  * This is the first line of defense - rejects invalid keys in <10μs
  */
 export function validateKeyFormat(apiKey: string): ValidationResult {
+  // Check for empty key
+  if (!apiKey || apiKey.trim() === '') {
+    return {
+      valid: false,
+      error: 'API key cannot be empty'
+    };
+  }
+
+  // Check prefix
+  if (!apiKey.startsWith('mb-')) {
+    return {
+      valid: false,
+      error: 'Invalid API key prefix (must start with mb-)'
+    };
+  }
+
   // Parse key
   const components = parseApiKey(apiKey);
-  
+
   if (!components) {
     return {
       valid: false,
       error: 'Invalid API key format'
     };
   }
-  
+
   // Verify signature
   if (!verifySignature(components)) {
     return {
@@ -96,7 +135,7 @@ export function validateKeyFormat(apiKey: string): ValidationResult {
       error: 'Invalid API key signature'
     };
   }
-  
+
   // Format and signature are valid
   return {
     valid: true,
