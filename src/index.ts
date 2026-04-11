@@ -52,14 +52,37 @@ app.use('*', cors({
 // Public Endpoints
 // ============================================================================
 
-// Health check
+// Health check with discovery status
 app.get('/health', (c) => {
-  return c.json({
+  const healthStatus: any = {
     status: 'ok',
     service: 'identity-vessel',
     version: '0.1.0',
-    timestamp: new Date().toISOString()
-  });
+    timestamp: new Date().toISOString(),
+    checks: {
+      discovery: { status: 'unknown', registered: false }
+    }
+  };
+
+  // Check Discovery registration status
+  const { discoveryClient } = require('./services/discovery-client');
+  if (discoveryClient) {
+    const isRunning = discoveryClient.isRunning;
+    const lastHeartbeat = discoveryClient.lastHeartbeat;
+
+    healthStatus.checks.discovery = {
+      status: isRunning ? 'healthy' : 'pending',
+      registered: isRunning,
+      lastHeartbeat: lastHeartbeat ? lastHeartbeat.toISOString() : null
+    };
+  } else {
+    healthStatus.checks.discovery = {
+      status: 'disabled',
+      registered: false
+    };
+  }
+
+  return c.json(healthStatus);
 });
 
 // Vessel capabilities (public metadata)
@@ -492,7 +515,52 @@ app.post('/v1/keys/revoke', async (c) => {
 
 console.log('[IdentityVessel] Starting server on port ' + config.port);
 
-export default {
+const server = {
   port: config.port,
   fetch: app.fetch
 };
+
+// ============================================================================
+// Discovery Vessel Integration (with bootstrap delay)
+// ============================================================================
+
+import { discoveryClient, registerWithDiscoveryAfterDelay } from './services/discovery-client';
+
+if (discoveryClient) {
+  // Start delayed registration (avoids circular dependency)
+  registerWithDiscoveryAfterDelay(discoveryClient)
+    .catch((error) => {
+      console.error('[Discovery] Bootstrap registration error', { error: error.message });
+    });
+
+  // Start heartbeat (handles re-registration if needed)
+  discoveryClient.startHeartbeat();
+  console.log('[Discovery] Heartbeat started');
+} else {
+  console.log('[Discovery] Discovery integration disabled');
+}
+
+// Graceful shutdown handler
+process.on('SIGTERM', async () => {
+  console.log('[Server] SIGTERM received, shutting down gracefully');
+
+  if (discoveryClient) {
+    await discoveryClient.shutdown();
+  }
+
+  console.log('[Server] Graceful shutdown complete');
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  console.log('[Server] SIGINT received, shutting down gracefully');
+
+  if (discoveryClient) {
+    await discoveryClient.shutdown();
+  }
+
+  console.log('[Server] Graceful shutdown complete');
+  process.exit(0);
+});
+
+export default server;

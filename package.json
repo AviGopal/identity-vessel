@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@metabob/vessel-discovery-client": "file:../../packages/vessel-discovery-client",
     "hono": "^4.6.14",
     "ioredis": "^5.4.1",
     "nanoid": "^5.0.9",
