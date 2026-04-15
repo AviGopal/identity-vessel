@@ -1,12 +1,36 @@
 /**
- * Identity Vessel - Single source of truth for API key operations
+ * Identity Vessel - Single source of truth for authentication operations
  *
  * This vessel is the authoritative service for:
+ * - JWT token generation and validation (Hono JWT, HS256)
+ * - Password hashing and verification (Argon2id via Bun)
  * - API key generation (HMAC-based)
  * - API key validation (format + signature + revocation check)
  * - API key revocation (Redis-backed)
  *
- * Other vessels delegate to identity-vessel for all API key operations.
+ * Other vessels delegate to identity-vessel for ALL authentication operations.
+ *
+ * JWT Endpoints:
+ * - POST /v1/jwt/generate     - Generate JWT token
+ *   Request:  { user_id, org_id, role, project_ids[]?, expires_in_seconds? }
+ *   Response: { token, expires_at, issued_at }
+ *
+ * - POST /v1/jwt/verify       - Verify JWT token
+ *   Request:  { token }
+ *   Response: { valid, user_id?, org_id?, role?, project_ids[]?, exp?, iat?, error? }
+ *
+ * Password Endpoints:
+ * - POST /v1/auth/password/hash    - Hash a password
+ *   Request:  { password }
+ *   Response: { hash }
+ *
+ * - POST /v1/auth/password/verify  - Verify a password against hash
+ *   Request:  { password, hash }
+ *   Response: { valid }
+ *
+ * - POST /v1/auth/password/validate - Validate password strength
+ *   Request:  { password }
+ *   Response: { valid, errors[], score }
  *
  * API Key Endpoints:
  * - POST /v1/keys/generate    - Generate new API key
@@ -21,12 +45,12 @@
  *   Request:  { key_id } or { api_key }
  *   Response: { revoked: true }
  *
- * Authentication Endpoints:
+ * Authentication Resolution:
  * - POST /v1/auth/resolve     - Resolve authentication impulse (JWT or API key)
  * - POST /v1/auth/minibob/signin - DEPRECATED (returns 410)
  * - POST /v2/auth/minibob/signin - DEPRECATED (returns 410)
  *
- * For account management (login/signup/password change), use user-vessel.
+ * For account/org/member management, use user-vessel (which delegates auth to this vessel).
  */
 
 import { Hono } from 'hono';
@@ -38,6 +62,8 @@ import { validateKeyFormat, parseApiKey } from './services/validation';
 import { revokeKey, isKeyRevoked } from './db/redis';
 import { config } from './services/config';
 import { z } from 'zod';
+import { generateToken, verifyToken, getSecretInfo } from './services/jwt';
+import { hashPassword, verifyPassword, validatePassword } from './services/password';
 
 const app = new Hono();
 
@@ -91,7 +117,7 @@ app.get('/capabilities', (c) => {
     vessel: {
       id: 'identity-vessel',
       name: 'Identity & Authentication Vessel',
-      version: '0.3.0',
+      version: '0.4.0',
       type: 'authentication'
     },
     resolvers: [
@@ -103,20 +129,28 @@ app.get('/capabilities', (c) => {
       }
     ],
     endpoints: [
+      // JWT Operations (canonical source of truth)
+      'POST /v1/jwt/generate - Generate JWT token with claims',
+      'POST /v1/jwt/verify - Verify JWT token and extract claims',
+      // Password Operations (canonical source of truth)
+      'POST /v1/auth/password/hash - Hash password with Argon2id',
+      'POST /v1/auth/password/verify - Verify password against hash',
+      'POST /v1/auth/password/validate - Validate password strength',
       // API Key Management (canonical source of truth)
       'POST /v1/keys/generate - Generate new API key with HMAC signature',
       'POST /v1/keys/validate - Validate API key (format, signature, revocation)',
       'POST /v1/keys/revoke - Revoke an API key',
-      // Authentication
+      // Authentication Resolution
       'POST /v1/auth/resolve - Resolve authentication impulse (JWT or API key)',
       'POST /v1/auth/minibob/signin - DEPRECATED (returns 410)',
       'POST /v2/auth/minibob/signin - DEPRECATED (returns 410)'
     ],
     notes: [
-      'identity-vessel is the SINGLE SOURCE OF TRUTH for API key operations',
-      'For user management (login/signup/password): use user-vessel',
-      'user-vessel delegates key generation/validation to identity-vessel',
-      'Revocation is stored in Redis with 1-year TTL'
+      'identity-vessel is the SINGLE SOURCE OF TRUTH for ALL authentication operations',
+      'JWT: Uses hono/jwt with HS256 algorithm',
+      'Password: Uses Argon2id via Bun.password (memory-hard, side-channel resistant)',
+      'API Keys: HMAC-based generation with Redis-backed revocation',
+      'user-vessel handles org/member/api-key DATA, delegates auth to identity-vessel'
     ]
   });
 });
@@ -170,6 +204,233 @@ app.post('/v1/auth/resolve', async (c) => {
         code: 'RESOLVE_FAILED',
         message: error instanceof Error ? error.message : 'Unknown error'
       }
+    }, 400);
+  }
+});
+
+// ============================================================================
+// JWT Token Generation and Verification (canonical source of truth)
+// ============================================================================
+
+const generateJWTSchema = z.object({
+  user_id: z.string().min(1),
+  org_id: z.string().min(1),
+  role: z.enum(['admin', 'member', 'viewer']),
+  project_ids: z.array(z.string()).optional(),
+  expires_in_seconds: z.number().positive().optional(),
+});
+
+/**
+ * POST /v1/jwt/generate
+ * Generate a JWT token with claims.
+ * This is the canonical endpoint - all services should call this.
+ *
+ * Request:  { user_id, org_id, role, project_ids[]?, expires_in_seconds? }
+ * Response: { token, expires_at, issued_at }
+ */
+app.post('/v1/jwt/generate', async (c) => {
+  try {
+    const body = await c.req.json();
+    const options = generateJWTSchema.parse(body);
+
+    const result = await generateToken(options);
+
+    console.log('[JWT] Token generated:', {
+      user_id: options.user_id,
+      org_id: options.org_id,
+      role: options.role,
+      expires_at: result.expires_at,
+    });
+
+    return c.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error('[JWT] Generation error:', error);
+
+    return c.json({
+      success: false,
+      error: {
+        code: 'JWT_GENERATION_FAILED',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      },
+    }, 400);
+  }
+});
+
+const verifyJWTSchema = z.object({
+  token: z.string().min(1),
+});
+
+/**
+ * POST /v1/jwt/verify
+ * Verify a JWT token and extract claims.
+ * This is the canonical endpoint - all services should call this.
+ *
+ * Request:  { token }
+ * Response: { valid, user_id?, org_id?, role?, project_ids[]?, exp?, iat?, error? }
+ */
+app.post('/v1/jwt/verify', async (c) => {
+  try {
+    const body = await c.req.json();
+    const { token } = verifyJWTSchema.parse(body);
+
+    const result = await verifyToken(token);
+
+    if (!result.valid) {
+      console.log('[JWT] Token verification failed:', { error: result.error });
+
+      return c.json({
+        success: true,
+        data: {
+          valid: false,
+          error: result.error,
+        },
+      });
+    }
+
+    console.log('[JWT] Token verified:', {
+      user_id: result.user_id,
+      org_id: result.org_id,
+    });
+
+    return c.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error('[JWT] Verification error:', error);
+
+    return c.json({
+      success: false,
+      error: {
+        code: 'JWT_VERIFICATION_FAILED',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      },
+    }, 400);
+  }
+});
+
+// ============================================================================
+// Password Hashing and Verification (canonical source of truth)
+// ============================================================================
+
+const hashPasswordSchema = z.object({
+  password: z.string().min(1),
+});
+
+/**
+ * POST /v1/auth/password/hash
+ * Hash a password using Argon2id.
+ * This is the canonical endpoint - all services should call this.
+ *
+ * Request:  { password }
+ * Response: { hash }
+ */
+app.post('/v1/auth/password/hash', async (c) => {
+  try {
+    const body = await c.req.json();
+    const { password } = hashPasswordSchema.parse(body);
+
+    const hash = await hashPassword(password);
+
+    console.log('[Password] Password hashed');
+
+    return c.json({
+      success: true,
+      data: {
+        hash,
+      },
+    });
+  } catch (error) {
+    console.error('[Password] Hashing error:', error);
+
+    return c.json({
+      success: false,
+      error: {
+        code: 'PASSWORD_HASH_FAILED',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      },
+    }, 400);
+  }
+});
+
+const verifyPasswordSchema = z.object({
+  password: z.string().min(1),
+  hash: z.string().min(1),
+});
+
+/**
+ * POST /v1/auth/password/verify
+ * Verify a password against a hash.
+ * This is the canonical endpoint - all services should call this.
+ *
+ * Request:  { password, hash }
+ * Response: { valid }
+ */
+app.post('/v1/auth/password/verify', async (c) => {
+  try {
+    const body = await c.req.json();
+    const { password, hash } = verifyPasswordSchema.parse(body);
+
+    const valid = await verifyPassword(password, hash);
+
+    console.log('[Password] Password verification:', { valid });
+
+    return c.json({
+      success: true,
+      data: {
+        valid,
+      },
+    });
+  } catch (error) {
+    console.error('[Password] Verification error:', error);
+
+    return c.json({
+      success: false,
+      error: {
+        code: 'PASSWORD_VERIFY_FAILED',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      },
+    }, 400);
+  }
+});
+
+const validatePasswordSchema = z.object({
+  password: z.string(),
+});
+
+/**
+ * POST /v1/auth/password/validate
+ * Validate password strength.
+ * This is the canonical endpoint - all services should call this.
+ *
+ * Request:  { password }
+ * Response: { valid, errors[], score }
+ */
+app.post('/v1/auth/password/validate', async (c) => {
+  try {
+    const body = await c.req.json();
+    const { password } = validatePasswordSchema.parse(body);
+
+    const result = validatePassword(password);
+
+    console.log('[Password] Password validation:', { valid: result.valid, score: result.score });
+
+    return c.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error('[Password] Validation error:', error);
+
+    return c.json({
+      success: false,
+      error: {
+        code: 'PASSWORD_VALIDATE_FAILED',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      },
     }, 400);
   }
 });
