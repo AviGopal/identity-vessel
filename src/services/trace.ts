@@ -59,12 +59,14 @@ export async function sendAuthenticationTrace(trace: AuthenticationTrace): Promi
       body: JSON.stringify({
         template_id: 'auth_resolve_v1',
         execution_id: `auth_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-        status: trace.success ? 'success' : 'failed',
+        status: trace.success ? 'completed' : 'failure',
+        success: trace.success,
         start_time: new Date(trace.startTime).toISOString(),
         end_time: new Date(trace.endTime).toISOString(),
         duration_ms: trace.durationMs,
         org_id: trace.orgId || 'unknown',
         user_id: trace.userId || 'unknown',
+        error_message: trace.error,
         metadata: {
           activity_type: trace.activityType,
           key_id: trace.keyId,
