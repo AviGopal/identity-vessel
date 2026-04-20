@@ -5,10 +5,16 @@ ARG BUILD_VERSION
 
 FROM oven/bun:1.2 AS build
 WORKDIR /app
-COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
-COPY src ./src
-COPY tsconfig.json ./
+
+# Copy shared packages first (for monorepo dependencies)
+COPY packages /app/packages
+
+COPY vessels/identity-vessel/package.json vessels/identity-vessel/bun.lock ./
+# Fix local package path for Docker build context
+RUN sed -i 's|file:../../packages/vessel-discovery-client|file:./packages/vessel-discovery-client|g' package.json
+RUN bun install
+COPY vessels/identity-vessel/src ./src
+COPY vessels/identity-vessel/tsconfig.json ./
 
 FROM oven/bun:1.2-slim AS runtime
 WORKDIR /app
