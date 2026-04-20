@@ -109,7 +109,7 @@ export function traceAuthentication<T>(
         startTime,
         endTime,
         durationMs: endTime - startTime,
-        success: result.authenticated !== false,
+        success: result.authenticated === true,
         orgId: result.orgId,
         userId: result.userId,
         keyId: result.keyId,
