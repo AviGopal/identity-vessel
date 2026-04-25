@@ -64,6 +64,7 @@ import { config } from './services/config';
 import { z } from 'zod';
 import { generateToken, verifyToken, getSecretInfo } from './services/jwt';
 import { hashPassword, verifyPassword, validatePassword } from './services/password';
+import { createRateLimitMiddleware } from './middleware/ratelimit';
 
 const app = new Hono();
 
@@ -175,7 +176,7 @@ const resolveSchema = z.object({
   })
 });
 
-app.post('/v1/auth/resolve', async (c) => {
+app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 20), async (c) => {
   try {
     const body = await c.req.json();
     const { impulse } = resolveSchema.parse(body);
@@ -369,7 +370,7 @@ const verifyPasswordSchema = z.object({
  * Request:  { password, hash }
  * Response: { valid }
  */
-app.post('/v1/auth/password/verify', async (c) => {
+app.post('/v1/auth/password/verify', createRateLimitMiddleware('password_verify', 5), async (c) => {
   try {
     const body = await c.req.json();
     const { password, hash } = verifyPasswordSchema.parse(body);
@@ -590,7 +591,7 @@ const validateKeySchema = z.object({
  * Request:  { api_key: string }
  * Response: { valid: boolean, org_id?, user_id?, key_id?, scopes?, role?, error? }
  */
-app.post('/v1/keys/validate', async (c) => {
+app.post('/v1/keys/validate', createRateLimitMiddleware('keys_validate', 100), async (c) => {
   try {
     const body = await c.req.json();
     const { api_key } = validateKeySchema.parse(body);

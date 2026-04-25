@@ -29,3 +29,8 @@ Thumbs.db
 dist
 build
 test/
+
+# Bootstrap key metadata — contains keyId for the admin bootstrap key.
+# The actual API key is never stored here, but the keyId is sensitive enough
+# that this file must not be committed. Store contents in env vars / K8s secrets.
+.bootstrap-key.json
