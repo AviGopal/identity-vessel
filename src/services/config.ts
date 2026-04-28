@@ -41,6 +41,17 @@ export interface IdentityVesselConfig {
     bootstrapDelayMs: number; // Delay before initial registration (30s default)
     shapes: string[];
   };
+
+  // User-Vessel Integration (optional)
+  // Identity-vessel queries user-vessel at auth-resolve time to look up the
+  // caller's default account and emit an `account_id` claim.  When user-vessel
+  // is unreachable we degrade gracefully — `account_id` is omitted and
+  // downstream services fall back to deriving it from `org_id`.
+  userVessel: {
+    enabled: boolean;
+    endpoint: string;
+    timeoutMs: number;
+  };
 }
 
 function parseEnvInt(key: string, defaultValue: number): number {
@@ -107,6 +118,12 @@ export function loadConfig(): IdentityVesselConfig {
         'apiKey',
         'jwtToken',
       ],
+    },
+
+    userVessel: {
+      enabled: parseEnvBool('USER_VESSEL_ENABLED', true),
+      endpoint: process.env.USER_VESSEL_ENDPOINT || 'http://user-vessel.activity-system.svc.cluster.local:8080',
+      timeoutMs: parseEnvInt('USER_VESSEL_TIMEOUT_MS', 1000),
     },
   };
 }

@@ -82,6 +82,13 @@ export interface AuthenticationResult {
   orgId?: string;
   userId?: string;
   keyId?: string;
+  /**
+   * Canonical account record id ("accounts:<slug>"), populated when
+   * user-vessel returns a membership for the resolved user.  Optional
+   * during the migration period — downstream callers must tolerate
+   * absence and fall back to deriving from `orgId`.
+   */
+  accountId?: string;
   type?: 'api_key' | 'session';
   scopes?: string[];
   reason?: string;

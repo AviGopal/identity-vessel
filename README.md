@@ -264,7 +264,17 @@ SURREALDB_DATABASE=learning_loop             # Database name
 JWT_SECRET=your-jwt-secret                   # JWT signing secret (required)
 
 # User-vessel integration
+# At auth-resolve time identity-vessel queries user-vessel's MCP tool
+# `query-user-context(user_id)` to look up the caller's account memberships
+# and emit an `account_id` claim on the response. user-vessel is the source
+# of truth for user→account mappings; identity-vessel does not cache them.
+# When user-vessel is unreachable the lookup degrades gracefully — the claim
+# is omitted and downstream callers (user-vessel, activity-api) fall back to
+# deriving account_id from org_id.
 USER_VESSEL_URL=http://user-vessel:8080      # User-vessel API for revocation checks (optional)
+USER_VESSEL_ENDPOINT=http://user-vessel.activity-system.svc.cluster.local:8080  # MCP query target for account_id lookup
+USER_VESSEL_ENABLED=true                     # Set to "false" to disable account_id enrichment
+USER_VESSEL_TIMEOUT_MS=1000                  # Per-call timeout for the lookup
 
 # Trace collection and learning
 ACTIVITY_API_ENDPOINT=http://metabob-activity-api.activity-system.svc.cluster.local:8080  # Where traces are sent (default: cluster-local)

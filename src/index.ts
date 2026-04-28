@@ -57,6 +57,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { resolveAuthentication } from './resolvers/auth';
+import type { AuthenticationImpulse } from './types';
 import { generateApiKey, generateKeyMetadata } from './services/keyGeneration';
 import { validateKeyFormat, parseApiKey } from './services/validation';
 import { revokeKey, isKeyRevoked } from './db/redis';
@@ -176,27 +177,108 @@ const resolveSchema = z.object({
   })
 });
 
+/**
+ * POST /v1/auth/resolve
+ *
+ * Two request forms are accepted:
+ *
+ * 1. Nested impulse form (legacy / activity-api):
+ *      Body: { impulse: { type: 'authentication', pointer: { type, apiKey|token } } }
+ *      Response: { success: true, data: AuthenticationResult }
+ *      where AuthenticationResult uses camelCase keys (orgId, userId, accountId).
+ *
+ * 2. Flat header form (user-vessel / dashboard):
+ *      Header: Authorization: ApiKey <key>  OR  Authorization: Bearer <jwt>
+ *      Body:   {} or empty
+ *      Response: { valid: true, user_id, org_id, account_id?, role }
+ *      Snake-case keys to match user-vessel's `IdentityClient` contract.
+ *
+ * The `account_id` claim is populated when user-vessel returns membership
+ * data for the resolved user.  If user-vessel is unreachable or the user has
+ * no memberships, `account_id` is omitted and downstream services derive it
+ * from `org_id`.
+ */
 app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 20), async (c) => {
   try {
-    const body = await c.req.json();
-    const { impulse } = resolveSchema.parse(body);
+    // Read body defensively — flat-form callers may send `{}` or no body.
+    let body: any = {};
+    try {
+      body = await c.req.json();
+    } catch {
+      body = {};
+    }
 
-    const result = await resolveAuthentication(impulse);
+    // Branch 1: nested impulse form — body has an `impulse` field.
+    if (body && typeof body === 'object' && body.impulse) {
+      const { impulse } = resolveSchema.parse(body);
+      const result = await resolveAuthentication(impulse);
 
-    // Return proper HTTP status based on authentication result
-    if (!result.authenticated) {
+      if (!result.authenticated) {
+        return c.json({
+          success: false,
+          error: {
+            code: 'AUTHENTICATION_FAILED',
+            message: result.reason || 'Authentication failed'
+          }
+        }, 401);
+      }
+
+      return c.json({
+        success: true,
+        data: result
+      });
+    }
+
+    // Branch 2: flat header form — read Authorization header.
+    const authHeader = c.req.header('Authorization');
+    if (!authHeader) {
       return c.json({
         success: false,
         error: {
-          code: 'AUTHENTICATION_FAILED',
-          message: result.reason || 'Authentication failed'
-        }
+          code: 'MISSING_AUTH_HEADER',
+          message: 'Provide either { impulse } body or Authorization header',
+        },
+      }, 400);
+    }
+
+    let impulseFromHeader: AuthenticationImpulse;
+    if (authHeader.startsWith('ApiKey ')) {
+      impulseFromHeader = {
+        type: 'authentication',
+        pointer: { type: 'apiKey', apiKey: authHeader.slice('ApiKey '.length) },
+      };
+    } else if (authHeader.startsWith('Bearer ')) {
+      impulseFromHeader = {
+        type: 'authentication',
+        pointer: { type: 'session', token: authHeader.slice('Bearer '.length) },
+      };
+    } else {
+      return c.json({
+        success: false,
+        error: {
+          code: 'INVALID_AUTH_SCHEME',
+          message: 'Authorization must start with "ApiKey " or "Bearer "',
+        },
+      }, 400);
+    }
+
+    const result = await resolveAuthentication(impulseFromHeader);
+    if (!result.authenticated) {
+      return c.json({
+        valid: false,
+        error: result.reason || 'Authentication failed',
       }, 401);
     }
 
+    // Flat snake-case response — matches user-vessel's IdentityClient contract.
+    // role is unknown to identity-vessel (user-vessel owns roles); default to
+    // `member` so the consumer's required-role check has a sane baseline.
     return c.json({
-      success: true,
-      data: result
+      valid: true,
+      user_id: result.userId,
+      org_id: result.orgId,
+      account_id: result.accountId,
+      role: 'member',
     });
   } catch (error) {
     return c.json({
