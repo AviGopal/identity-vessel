@@ -28,18 +28,25 @@ export interface MetabobJWTClaims extends JWTPayload {
   // Metabob-specific claims
   org_id: string;    // Organization ID
   user_id: string;   // User ID (same as sub for clarity)
-  role: string;      // User role (admin, member, viewer)
+  role: string;      // User role (admin, member, viewer, owner)
   project_ids: string[]; // Accessible project IDs
+  account_id?: string;   // Optional: caller's default account (record-reference-as-string, e.g. "accounts:metabob")
 }
 
 /**
  * Options for generating a JWT token
+ *
+ * `account_id` is optional and emitted alongside `org_id` during the
+ * accounts/organizations migration window. Login/signup populate it from
+ * account_members; legacy callers omit it (downstream tenant helpers fall
+ * back to deriving from org_id).
  */
 export interface GenerateTokenOptions {
   user_id: string;
   org_id: string;
-  role: 'admin' | 'member' | 'viewer';
+  role: 'admin' | 'member' | 'viewer' | 'owner';
   project_ids?: string[];
+  account_id?: string;
   expires_in_seconds?: number; // Default: 900 (15 minutes)
 }
 
@@ -61,6 +68,7 @@ export interface VerifyTokenResult {
   org_id?: string;
   role?: string;
   project_ids?: string[];
+  account_id?: string;
   exp?: number;
   iat?: number;
   error?: string;
@@ -78,6 +86,7 @@ export async function generateToken(options: GenerateTokenOptions): Promise<Gene
     org_id,
     role,
     project_ids = [],
+    account_id,
     expires_in_seconds = 900, // 15 minutes default
   } = options;
 
@@ -94,6 +103,9 @@ export async function generateToken(options: GenerateTokenOptions): Promise<Gene
     role,
     project_ids,
   };
+  if (account_id) {
+    payload.account_id = account_id;
+  }
 
   const token = await sign(payload, JWT_SECRET, 'HS256');
 
@@ -129,6 +141,7 @@ export async function verifyToken(token: string): Promise<VerifyTokenResult> {
       org_id: payload.org_id,
       role: payload.role,
       project_ids: payload.project_ids || [],
+      account_id: payload.account_id,
       exp: payload.exp,
       iat: payload.iat,
     };

@@ -32,6 +32,15 @@
  *   Request:  { password }
  *   Response: { valid, errors[], score }
  *
+ * Sign-in Endpoints (Phase 9 / F-NN-K):
+ * - POST /v1/auth/login       - Email + password sign-in → JWT
+ *   Request:  { email, password }
+ *   Response: { token, user_id, org_id, role, account_id?, expires_at }
+ *
+ * - POST /v1/auth/signup      - Create user + org → JWT
+ *   Request:  { email, password, name?, org_name?, accept_invitation_token? }
+ *   Response: { token, user_id, org_id, role, account_id?, expires_at }
+ *
  * API Key Endpoints:
  * - POST /v1/keys/generate    - Generate new API key (no DB persistence)
  *   Request:  { org_id, user_id, scopes[]?, key_type?: "live"|"test", name?, expires_in_days? }
@@ -67,6 +76,7 @@ import { validateKeyFormat, validateKey, parseApiKey } from './services/validati
 import { revokeKey, isKeyRevoked } from './db/redis';
 import { config } from './services/config';
 import { issueApiKey } from './resolvers/issue-key';
+import { loginWithPassword, signupWithPassword } from './resolvers/login';
 import { z } from 'zod';
 import { generateToken, verifyToken, getSecretInfo } from './services/jwt';
 import { hashPassword, verifyPassword, validatePassword } from './services/password';
@@ -90,7 +100,7 @@ app.get('/health', (c) => {
   const healthStatus: any = {
     status: 'ok',
     service: 'identity-vessel',
-    version: '0.1.0',
+    version: '0.2.0',
     timestamp: new Date().toISOString(),
     checks: {
       discovery: { status: 'unknown', registered: false }
@@ -124,7 +134,7 @@ app.get('/capabilities', (c) => {
     vessel: {
       id: 'identity-vessel',
       name: 'Identity & Authentication Vessel',
-      version: '0.4.0',
+      version: '0.5.0',
       type: 'authentication'
     },
     resolvers: [
@@ -143,6 +153,9 @@ app.get('/capabilities', (c) => {
       'POST /v1/auth/password/hash - Hash password with Argon2id',
       'POST /v1/auth/password/verify - Verify password against hash',
       'POST /v1/auth/password/validate - Validate password strength',
+      // Sign-in flow (Phase 9 / F-NN-K)
+      'POST /v1/auth/login - Email+password sign-in → JWT',
+      'POST /v1/auth/signup - Create user+org → JWT',
       // API Key Management (canonical source of truth)
       'POST /v1/keys/generate - Generate new API key with HMAC signature',
       'POST /v1/keys/issue - Mint new API key + persist row (admin-only)',
@@ -522,6 +535,35 @@ app.post('/v1/auth/password/validate', async (c) => {
       },
     }, 400);
   }
+});
+
+// ============================================================================
+// Email + Password Sign-in (Phase 9 / F-NN-K)
+// ============================================================================
+//
+// POST /v1/auth/login   { email, password }
+//   200 → { token, user_id, org_id, role, account_id?, expires_at }
+//   401 invalid_credentials | 400 invalid_input | 500 db/jwt
+//
+// POST /v1/auth/signup  { email, password, name?, org_name?, accept_invitation_token? }
+//   200 → same shape as login
+//   400 invalid_input | weak_password | needs_invitation_or_org
+//   409 email_taken | org name taken | 500 db/jwt | 501 invitation deferred
+//
+// Constant-time on missing user — see resolvers/login.ts.
+
+app.post('/v1/auth/login', createRateLimitMiddleware('auth_login', 10), async (c) => {
+  let body: unknown = {};
+  try { body = await c.req.json(); } catch { body = {}; }
+  const result = await loginWithPassword(body);
+  return c.json(result.body, result.status as any);
+});
+
+app.post('/v1/auth/signup', createRateLimitMiddleware('auth_signup', 5), async (c) => {
+  let body: unknown = {};
+  try { body = await c.req.json(); } catch { body = {}; }
+  const result = await signupWithPassword(body);
+  return c.json(result.body, result.status as any);
 });
 
 // ============================================================================
@@ -954,7 +996,7 @@ const server = {
 if ((process.env.SCHEMA_AUTOAPPLY || 'false').toLowerCase() === 'true') {
   (async () => {
     const { query } = await import('./db/surrealdb');
-    const migrations = ['001-api-keys.surql'];
+    const migrations = ['001-api-keys.surql', '002-users-password-hash.surql'];
     for (const file of migrations) {
       try {
         const sql = await Bun.file(`${import.meta.dir}/../sql/migrations/${file}`).text();
