@@ -65,12 +65,28 @@ export interface SignupRequest {
   name?: string; org_name?: string; accept_invitation_token?: string;
 }
 
+// Response shape matches cloud-dashboard's LoginResponse contract
+// (src/types/api.ts): { token, user: { id, email, name, org_id, role, ... } }.
+// `user_id`/`account_id`/`expires_at` are kept at the top level as ergonomic
+// extras for non-dashboard callers (CLI, tests) — strictly additive.
 export interface AuthSuccess {
   ok: true;
   status: 200;
   body: {
-    token: string; user_id: string; org_id: string; role: string;
-    account_id?: string; expires_at: string;
+    token: string;
+    user: {
+      id: string;
+      email: string;
+      name: string;
+      org_id: string;
+      role: 'owner' | 'admin' | 'member' | 'viewer';
+      account_id?: string;
+    };
+    user_id: string;
+    org_id: string;
+    role: string;
+    account_id?: string;
+    expires_at: string;
   };
 }
 
@@ -138,6 +154,8 @@ function rankRole(r: string): number { return ROLE_RANK[r] ?? 4; }
 async function mintAuthJwt(
   query: QueryFn,
   userRef: string,
+  email: string,
+  name: string,
   defaultOrgId: string | undefined,
   fallbackOrgRef: string | undefined,
 ): Promise<AuthSuccess['body'] | null> {
@@ -175,7 +193,18 @@ async function mintAuthJwt(
       user_id: userRef, org_id: orgRef, role, account_id, expires_in_seconds: 900,
     });
     return {
-      token: result.token, user_id: userRef, org_id: orgRef, role,
+      token: result.token,
+      user: {
+        id: userRef,
+        email,
+        name,
+        org_id: orgRef,
+        role,
+        ...(account_id ? { account_id } : {}),
+      },
+      user_id: userRef,
+      org_id: orgRef,
+      role,
       ...(account_id ? { account_id } : {}),
       expires_at: result.expires_at,
     };
@@ -221,7 +250,7 @@ export async function loginWithPassword(body: unknown): Promise<AuthResult> {
   let userRow: any = null;
   try {
     const result = await query(
-      'SELECT id, email, password_hash, default_org_id FROM users WHERE email = $email LIMIT 1;',
+      'SELECT id, email, name, password_hash, default_org_id FROM users WHERE email = $email LIMIT 1;',
       { email: validated.email },
     );
     userRow = extractRows<any>(result)[0] ?? null;
@@ -244,7 +273,9 @@ export async function loginWithPassword(body: unknown): Promise<AuthResult> {
   }
 
   const userRef = toRecordRef('users', userRow.id);
-  const jwtBody = await mintAuthJwt(query, userRef, userRow.default_org_id, undefined);
+  const userEmail = typeof userRow.email === 'string' ? userRow.email : validated.email;
+  const userName = typeof userRow.name === 'string' && userRow.name.length > 0 ? userRow.name : userEmail;
+  const jwtBody = await mintAuthJwt(query, userRef, userEmail, userName, userRow.default_org_id, undefined);
   if (!jwtBody) return fail(500, 'JWT_FAILED', 'failed to mint session token');
 
   return { ok: true, status: 200, body: jwtBody };
@@ -353,7 +384,7 @@ export async function signupWithPassword(body: unknown): Promise<AuthResult> {
     return fail(500, 'PERSIST_FAILED', err instanceof Error ? err.message : 'tenant CREATE failed');
   }
 
-  const jwtBody = await mintAuthJwt(query, userRef, orgRef, orgRef);
+  const jwtBody = await mintAuthJwt(query, userRef, validated.email, displayName, orgRef, orgRef);
   if (!jwtBody) return fail(500, 'JWT_FAILED', 'failed to mint session token after signup');
 
   return { ok: true, status: 200, body: jwtBody };
