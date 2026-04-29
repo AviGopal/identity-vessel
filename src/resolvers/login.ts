@@ -156,8 +156,13 @@ async function mintAuthJwt(
   const orgPick = orgRows[0];
   const acctPick = acctRows[0];
 
+  // Derive org from account when organization_members lacks a match.
+  // user-vessel migration 002 establishes 1:1 mapping: accounts:<X> mirrors
+  // organizations:<X>. So we can fall back to the account suffix.
+  const acctSuffix = acctPick?.account_id?.replace(/^accounts:/, '');
   const orgRef =
     (orgPick ? toRecordRef('organizations', orgPick.org_id) : undefined)
+    || (acctSuffix ? toRecordRef('organizations', acctSuffix) : undefined)
     || fallbackOrgRef
     || (defaultOrgId ? toRecordRef('organizations', defaultOrgId) : undefined);
   if (!orgRef) return null;
