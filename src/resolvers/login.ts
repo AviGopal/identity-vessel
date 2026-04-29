@@ -141,9 +141,14 @@ async function mintAuthJwt(
   defaultOrgId: string | undefined,
   fallbackOrgRef: string | undefined,
 ): Promise<AuthSuccess['body'] | null> {
+  // Use `<string>user_id = $user_id` cast: account_members.user_id may be
+  // stored as a record-reference (record<users>) per the deployed schema even
+  // though user-vessel migration 002 declares it TYPE string (the OVERWRITE
+  // didn't take when activity-api owned the field first). The cast normalizes
+  // both shapes to the canonical "users:<id>" string form for comparison.
   const [omsRaw, amsRaw] = await Promise.all([
-    query('SELECT org_id, role FROM organization_members WHERE user_id = $user_id;', { user_id: userRef }),
-    query('SELECT account_id, role FROM account_members WHERE user_id = $user_id;', { user_id: userRef }),
+    query('SELECT org_id, role FROM organization_members WHERE <string>user_id = $user_id;', { user_id: userRef }),
+    query('SELECT account_id, role FROM account_members WHERE <string>user_id = $user_id;', { user_id: userRef }),
   ]);
 
   const orgRows = extractRows<any>(omsRaw).slice().sort((a, b) => rankRole(a.role) - rankRole(b.role));
