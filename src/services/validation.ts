@@ -198,10 +198,11 @@ export async function lookupKeyScopes(keyId: string): Promise<string[] | null> {
   try {
     const query = await getQueryFn();
 
-    // Try both lookup strategies in a single round-trip via SurrealDB's
-    // multi-statement query support.  The first non-empty result wins.
+    // SurrealDB 3.x renamed `type::thing` → `type::record`; we avoid the helper
+    // entirely and match by `key_id` (HMAC-embedded) or `key_prefix` (operator
+    // label). Both fields are indexed (idx_api_key_key_id, idx_api_key_key_prefix).
     const result = await query(
-      `SELECT scopes FROM api_key WHERE id = type::thing("api_key", $key_id) OR key_prefix = $key_id LIMIT 1;`,
+      `SELECT scopes FROM api_key WHERE key_id = $key_id OR key_prefix = $key_id LIMIT 1;`,
       { key_id: keyId }
     );
 

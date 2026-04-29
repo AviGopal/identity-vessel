@@ -163,17 +163,20 @@ export async function issueApiKey(
 
   const keyHash = createHash('sha256').update(generated.key).digest('hex');
 
-  // id is the HMAC-embedded keyId so lookupKeyScopes() resolves the row by the
-  // identifier embedded in subsequent ApiKey auth headers. org_id and user_id
-  // are typed as record<organizations>/record<users> per the canary schema, so
-  // we coerce string references via type::thing.
+  // SurrealDB 3.x renamed `type::thing` → `type::record`; we avoid the helper
+  // entirely and use the auto-generated id, persisting the HMAC-embedded keyId
+  // separately as `key_id` (indexed) so `lookupKeyScopes()` can find it.
+  // The deployed `api_key` schema (per identity-vessel migration 001) types
+  // `org_id` and `user_id` as TYPE string (F-NN-H pattern), so we pass them
+  // through verbatim.
   try {
     const query = await getQueryFn();
     await query(
-      `CREATE type::thing("api_key", $key_id) SET
+      `CREATE api_key SET
+        key_id = $key_id,
         key_hash = $key_hash,
-        org_id = type::thing("organizations", string::replace($org_id, "organizations:", "")),
-        user_id = type::thing("users", string::replace($user_id, "users:", "")),
+        org_id = $org_id,
+        user_id = $user_id,
         scopes = $scopes,
         created_at = time::now(),
         is_active = true,

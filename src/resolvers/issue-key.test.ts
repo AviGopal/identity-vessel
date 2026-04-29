@@ -196,12 +196,13 @@ describe('issueApiKey — admin-only key issuance', () => {
     if (!captured) return;
     const cap = captured as { sql: string; params: Record<string, any> };
 
-    expect(cap.sql).toContain('type::thing("api_key", $key_id)');
+    expect(cap.sql).toContain('CREATE api_key SET');
+    expect(cap.sql).toContain('key_id = $key_id');
     if (result.ok) expect(cap.params.key_id).toBe(result.key_id);
 
     expect(cap.params.key_hash).toMatch(/^[0-9a-f]{64}$/);
-    expect(cap.sql).toContain('type::thing("organizations"');
-    expect(cap.sql).toContain('type::thing("users"');
+    expect(cap.sql).toContain('org_id = $org_id');
+    expect(cap.sql).toContain('user_id = $user_id');
     expect(cap.params.org_id).toBe('organizations:metabob');
     expect(cap.params.user_id).toBe('users:bob');
     expect(cap.params.scopes).toEqual(['read']);
