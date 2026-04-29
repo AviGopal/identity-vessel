@@ -336,7 +336,7 @@ export async function signupWithPassword(body: unknown): Promise<AuthResult> {
   // Idempotency: refuse on org collision so we never silently merge users
   // into someone else's org.
   try {
-    const orgCheck = await query('SELECT id FROM type::thing($id);', { id: orgRef });
+    const orgCheck = await query('SELECT id FROM type::record($id);', { id: orgRef });
     if (extractRows<any>(orgCheck).length > 0) {
       return fail(409, 'EMAIL_TAKEN', 'organization name already taken');
     }
@@ -364,7 +364,7 @@ export async function signupWithPassword(body: unknown): Promise<AuthResult> {
 
   try {
     await query(
-      `CREATE type::thing($id) SET name = $name, tier = 'free';`,
+      `CREATE type::record($id) SET name = $name, tier = 'free';`,
       { id: orgRef, name: orgName },
     );
     await query(
@@ -373,7 +373,7 @@ export async function signupWithPassword(body: unknown): Promise<AuthResult> {
     );
     // Mirror the org as an account (matches user-vessel migration 002).
     await query(
-      `CREATE type::thing($id) SET name = $name, tier = 'free', seat_limit = 1, created_by = $user_id;`,
+      `CREATE type::record($id) SET name = $name, tier = 'free', seat_limit = 1, created_by = $user_id;`,
       { id: acctRef, name: orgName, user_id: userRef },
     );
     await query(
