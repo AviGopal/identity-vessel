@@ -91,10 +91,14 @@ async function resolveJWT(token: string): Promise<AuthenticationResult> {
   try {
     const payload = await verify(token, JWT_SECRET, "HS256") as any;
 
+    // generateToken() emits snake_case claims (org_id, user_id, account_id)
+    // per the canonical JWT shape; legacy callers may have used camelCase, so
+    // accept both forms.
     return {
       authenticated: true,
-      orgId: payload.orgId as string,
-      userId: payload.userId as string,
+      orgId: (payload.org_id ?? payload.orgId) as string,
+      userId: (payload.user_id ?? payload.userId) as string,
+      accountId: (payload.account_id ?? payload.accountId) as string | undefined,
       type: 'session',
       scopes: ['read', 'write'] // Sessions get full access
     };
