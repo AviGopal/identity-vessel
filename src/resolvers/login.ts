@@ -149,7 +149,8 @@ function rankRole(r: string): number { return ROLE_RANK[r] ?? 4; }
 /**
  * Mint a JWT for the authenticated user. Picks org+account from membership
  * rows (owner > admin > member > viewer); falls back to fallbackOrgRef or
- * `users.default_org_id`. Returns null when no org claim can be derived.
+ * `users.org_id` (schema field per deployed migration). Returns null when no
+ * org claim can be derived.
  */
 async function mintAuthJwt(
   query: QueryFn,
@@ -250,7 +251,7 @@ export async function loginWithPassword(body: unknown): Promise<AuthResult> {
   let userRow: any = null;
   try {
     const result = await query(
-      'SELECT id, email, name, password_hash, default_org_id FROM users WHERE email = $email LIMIT 1;',
+      'SELECT id, email, name, password_hash, org_id FROM users WHERE email = $email LIMIT 1;',
       { email: validated.email },
     );
     userRow = extractRows<any>(result)[0] ?? null;
@@ -275,7 +276,7 @@ export async function loginWithPassword(body: unknown): Promise<AuthResult> {
   const userRef = toRecordRef('users', userRow.id);
   const userEmail = typeof userRow.email === 'string' ? userRow.email : validated.email;
   const userName = typeof userRow.name === 'string' && userRow.name.length > 0 ? userRow.name : userEmail;
-  const jwtBody = await mintAuthJwt(query, userRef, userEmail, userName, userRow.default_org_id, undefined);
+  const jwtBody = await mintAuthJwt(query, userRef, userEmail, userName, userRow.org_id, undefined);
   if (!jwtBody) return fail(500, 'JWT_FAILED', 'failed to mint session token');
 
   return { ok: true, status: 200, body: jwtBody };
@@ -352,7 +353,7 @@ export async function signupWithPassword(body: unknown): Promise<AuthResult> {
       `CREATE users SET
         email = $email, name = $name,
         password_hash = $password_hash,
-        default_org_id = $org_id;`,
+        org_id = $org_id;`,
       { email: validated.email, name: displayName, password_hash: passwordHash, org_id: orgRef },
     );
     const created = extractRows<any>(userResult)[0];
