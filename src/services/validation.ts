@@ -1,5 +1,16 @@
 /**
- * Fast API key validation with HMAC signature verification
+ * Fast API key validation with HMAC signature verification.
+ *
+ * Two-layer validation:
+ *   1. validateKeyFormat()  — synchronous, format + HMAC only (no DB).
+ *   2. validateKey()        — async, format + HMAC + DB-backed scope lookup.
+ *
+ * F-NN-I (2026-04-28): API-key auth previously hardcoded `scopes: ['read','write']`,
+ * making admin operations dispatched via API key impossible.  validateKey()
+ * now reads the `scopes` field from the api_keys row (when present) so admin-
+ * scoped keys can authenticate destructive operations.  When the row is
+ * missing or has no scopes column we fall through to the legacy default to
+ * preserve existing canary auth flows (graceful degradation).
  */
 
 import { createHmac, timingSafeEqual } from 'crypto';
@@ -7,6 +18,25 @@ import type { ApiKeyComponents, ValidationResult } from '../types';
 
 // Environment configuration
 const SECRET_KEY = process.env.API_KEY_SECRET || 'dev-secret-change-in-production';
+
+// Lazy-imported query function so that validation.ts has no hard dependency
+// on SurrealDB at module-load time (keeps the synchronous fast-path test-clean).
+type QueryFn = (sql: string, params?: Record<string, any>) => Promise<any>;
+let queryOverride: QueryFn | null = null;
+
+/**
+ * Test-only: substitute the SurrealDB query function used by lookupKeyScopes.
+ * Pass null to reset to the default (real SurrealDB connection).
+ */
+export function setQueryFn(fn: QueryFn | null): void {
+  queryOverride = fn;
+}
+
+async function getQueryFn(): Promise<QueryFn> {
+  if (queryOverride) return queryOverride;
+  const mod = await import('../db/surrealdb');
+  return mod.query as QueryFn;
+}
 
 /**
  * Parse API key into components
@@ -143,4 +173,80 @@ export function validateKeyFormat(apiKey: string): ValidationResult {
     userId: components.userId,
     keyId: components.keyId
   };
+}
+
+/**
+ * Look up the scopes for an api_key row by its embedded keyId.
+ *
+ * Returns the row's `scopes` array if found, otherwise null.  Never throws —
+ * any DB error (connection refused, missing namespace, query syntax error)
+ * is logged and returns null so the caller can fall back to default scopes.
+ *
+ * The keyId embedded in the HMAC payload (e.g. "key_xyz123") is matched against
+ * the api_keys table.  Two lookup strategies are attempted to remain forward-
+ * compatible across schema variants:
+ *   1. Direct record-id lookup (id = api_keys:<keyId>)
+ *   2. key_prefix field match (current user-vessel schema uses this)
+ *
+ * If the row does not have a `scopes` field at all (current schema does not
+ * define one yet — see F-NN-I in the project CLAUDE.md), null is returned and
+ * the caller falls back to the legacy default.
+ */
+export async function lookupKeyScopes(keyId: string): Promise<string[] | null> {
+  if (!keyId) return null;
+
+  try {
+    const query = await getQueryFn();
+
+    // Try both lookup strategies in a single round-trip via SurrealDB's
+    // multi-statement query support.  The first non-empty result wins.
+    const result = await query(
+      `SELECT scopes FROM api_keys WHERE id = type::thing("api_keys", $key_id) OR key_prefix = $key_id LIMIT 1;`,
+      { key_id: keyId }
+    );
+
+    // SurrealDB returns the result set directly via our query() helper.
+    const rows = Array.isArray(result) ? result : (result?.result ?? []);
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return null;
+    }
+
+    const scopes = rows[0]?.scopes;
+    if (!Array.isArray(scopes) || scopes.length === 0) {
+      return null;
+    }
+
+    // Defensive: ensure every entry is a string before returning.
+    return scopes.every((s) => typeof s === 'string') ? scopes : null;
+  } catch (error) {
+    // Graceful degradation: log once, return null so caller uses defaults.
+    console.warn('[validation] lookupKeyScopes failed, falling back to defaults', {
+      key_id: keyId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+/**
+ * Full validation: format + HMAC + DB-backed scope lookup.
+ *
+ * This is the path that auth-resolve and the /v1/keys/validate endpoint use
+ * when they need the caller's scope set.  validateKeyFormat() remains the
+ * synchronous fast-path for callers that only need format/signature checks
+ * (e.g. revocation, which only needs the keyId).
+ */
+export async function validateKey(apiKey: string): Promise<ValidationResult> {
+  const result = validateKeyFormat(apiKey);
+
+  if (!result.valid || !result.keyId) {
+    return result;
+  }
+
+  const scopes = await lookupKeyScopes(result.keyId);
+  if (scopes !== null) {
+    return { ...result, scopes };
+  }
+
+  return result;
 }

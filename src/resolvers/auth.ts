@@ -15,7 +15,7 @@
  */
 
 import type { AuthenticationImpulse, AuthenticationResult } from '../types';
-import { validateKeyFormat } from '../services/validation';
+import { validateKey } from '../services/validation';
 import { isKeyRevoked } from '../db/redis';
 import { traceAuthentication } from '../services/trace';
 import { verify } from 'hono/jwt';
@@ -110,8 +110,10 @@ async function resolveJWT(token: string): Promise<AuthenticationResult> {
  * Resolve API key
  */
 async function resolveAPIKey(apiKey: string): Promise<AuthenticationResult> {
-  // Validate format and signature
-  const validation = validateKeyFormat(apiKey);
+  // Validate format, signature, and look up DB-backed scopes (F-NN-I).
+  // validateKey returns scopes from the api_keys row when present; otherwise
+  // scopes is left undefined and we fall back to the legacy default below.
+  const validation = await validateKey(apiKey);
 
   if (!validation.valid) {
     return {
@@ -130,14 +132,17 @@ async function resolveAPIKey(apiKey: string): Promise<AuthenticationResult> {
     };
   }
 
-  // Authentication successful
+  // Authentication successful.  Use ?? rather than || so that an explicit
+  // empty-array scopes value from the DB does not silently inherit defaults
+  // (`||` would, `??` won't — and lookupKeyScopes already returns null for
+  // empty arrays, keeping the default-fallback contract intact).
   return {
     authenticated: true,
     orgId: validation.orgId,
     userId: validation.userId,
     keyId: validation.keyId,
     type: 'api_key',
-    scopes: validation.scopes || ['read', 'write']
+    scopes: validation.scopes ?? ['read', 'write']
   };
 }
 

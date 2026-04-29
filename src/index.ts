@@ -59,7 +59,7 @@ import { logger } from 'hono/logger';
 import { resolveAuthentication } from './resolvers/auth';
 import type { AuthenticationImpulse } from './types';
 import { generateApiKey, generateKeyMetadata } from './services/keyGeneration';
-import { validateKeyFormat, parseApiKey } from './services/validation';
+import { validateKeyFormat, validateKey, parseApiKey } from './services/validation';
 import { revokeKey, isKeyRevoked } from './db/redis';
 import { config } from './services/config';
 import { z } from 'zod';
@@ -678,8 +678,12 @@ app.post('/v1/keys/validate', createRateLimitMiddleware('keys_validate', 100), a
     const body = await c.req.json();
     const { api_key } = validateKeySchema.parse(body);
 
-    // Step 1: Validate format and HMAC signature (fast path - no network)
-    const validation = validateKeyFormat(api_key);
+    // Step 1: Validate format, HMAC signature, AND DB-backed scopes (F-NN-I).
+    // validateKey() merges format + signature checks with a graceful api_keys
+    // row lookup so admin-scoped keys flow through to the response.  Returns
+    // scopes=undefined when no row/no scopes column — we fall back to legacy
+    // default below.
+    const validation = await validateKey(api_key);
 
     if (!validation.valid) {
       return c.json({
@@ -717,7 +721,8 @@ app.post('/v1/keys/validate', createRateLimitMiddleware('keys_validate', 100), a
         org_id: validation.orgId,
         user_id: validation.userId,
         key_id: validation.keyId,
-        scopes: validation.scopes || ['read', 'write'],
+        // ?? rather than || so an explicit empty/admin scope set from DB wins.
+        scopes: validation.scopes ?? ['read', 'write'],
         role: 'user', // Default role - caller can override based on their DB
       },
     });
