@@ -1,6 +1,6 @@
 {
   "name": "metabob-identity-vessel",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Lightweight authentication vessel with HMAC-based API keys",
   "type": "module",
   "scripts": {

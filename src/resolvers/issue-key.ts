@@ -169,27 +169,31 @@ export async function issueApiKey(
   // The deployed `api_key` schema (per identity-vessel migration 001) types
   // `org_id` and `user_id` as TYPE string (F-NN-H pattern), so we pass them
   // through verbatim.
-  try {
-    const query = await getQueryFn();
-    await query(
-      `CREATE api_key SET
+  // The api_key.expires_at schema field is `none | datetime` — passing NULL
+  // fails coercion. Omit the SET clause entirely when no expiration is set so
+  // the field defaults to NONE.
+  const sql = `CREATE api_key SET
         key_id = $key_id,
         key_hash = $key_hash,
         org_id = $org_id,
         user_id = $user_id,
         scopes = $scopes,
         created_at = time::now(),
-        is_active = true,
-        expires_at = $expires_at;`,
-      {
-        key_id: generated.keyId,
-        key_hash: keyHash,
-        org_id: validated.org_id,
-        user_id: validated.user_id,
-        scopes,
-        expires_at: generated.expiresAt ?? null,
-      },
-    );
+        is_active = true${
+          generated.expiresAt ? ',\n        expires_at = <datetime>$expires_at' : ''
+        };`;
+  const params: Record<string, unknown> = {
+    key_id: generated.keyId,
+    key_hash: keyHash,
+    org_id: validated.org_id,
+    user_id: validated.user_id,
+    scopes,
+  };
+  if (generated.expiresAt) params.expires_at = generated.expiresAt;
+
+  try {
+    const query = await getQueryFn();
+    await query(sql, params);
   } catch (err) {
     return fail(500, 'PERSIST_FAILED', err instanceof Error ? err.message : 'Failed to persist api_key row');
   }
