@@ -7,7 +7,7 @@
  *
  * F-NN-I (2026-04-28): API-key auth previously hardcoded `scopes: ['read','write']`,
  * making admin operations dispatched via API key impossible.  validateKey()
- * now reads the `scopes` field from the api_keys row (when present) so admin-
+ * now reads the `scopes` field from the api_key row (when present) so admin-
  * scoped keys can authenticate destructive operations.  When the row is
  * missing or has no scopes column we fall through to the legacy default to
  * preserve existing canary auth flows (graceful degradation).
@@ -183,9 +183,9 @@ export function validateKeyFormat(apiKey: string): ValidationResult {
  * is logged and returns null so the caller can fall back to default scopes.
  *
  * The keyId embedded in the HMAC payload (e.g. "key_xyz123") is matched against
- * the api_keys table.  Two lookup strategies are attempted to remain forward-
+ * the api_key table.  Two lookup strategies are attempted to remain forward-
  * compatible across schema variants:
- *   1. Direct record-id lookup (id = api_keys:<keyId>)
+ *   1. Direct record-id lookup (id = api_key:<keyId>)
  *   2. key_prefix field match (current user-vessel schema uses this)
  *
  * If the row does not have a `scopes` field at all (current schema does not
@@ -201,7 +201,7 @@ export async function lookupKeyScopes(keyId: string): Promise<string[] | null> {
     // Try both lookup strategies in a single round-trip via SurrealDB's
     // multi-statement query support.  The first non-empty result wins.
     const result = await query(
-      `SELECT scopes FROM api_keys WHERE id = type::thing("api_keys", $key_id) OR key_prefix = $key_id LIMIT 1;`,
+      `SELECT scopes FROM api_key WHERE id = type::thing("api_key", $key_id) OR key_prefix = $key_id LIMIT 1;`,
       { key_id: keyId }
     );
 

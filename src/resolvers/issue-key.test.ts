@@ -5,7 +5,7 @@
  *   1. Admin can issue a key with custom scopes
  *   2. Non-admin gets 403
  *   3. Generated key authenticates via existing validateKey() flow (round-trip)
- *   4. Persisted api_keys row carries the right fields (mocked DB)
+ *   4. Persisted api_key row carries the right fields (mocked DB)
  *
  * Plus essential guards (missing header, malformed key) so the contract is
  * locked. Redis + SurrealDB are mocked at module load time.
@@ -76,7 +76,7 @@ describe('issueApiKey — admin-only key issuance', () => {
       expect(result.expires_at).toBeDefined();
     }
     expect(captured.sql).toContain('CREATE');
-    expect(captured.sql).toContain('api_keys');
+    expect(captured.sql).toContain('api_key');
     expect(captured.params?.scopes).toEqual(['read', 'write', 'admin']);
   });
 
@@ -196,7 +196,7 @@ describe('issueApiKey — admin-only key issuance', () => {
     if (!captured) return;
     const cap = captured as { sql: string; params: Record<string, any> };
 
-    expect(cap.sql).toContain('type::thing("api_keys", $key_id)');
+    expect(cap.sql).toContain('type::thing("api_key", $key_id)');
     if (result.ok) expect(cap.params.key_id).toBe(result.key_id);
 
     expect(cap.params.key_hash).toMatch(/^[0-9a-f]{64}$/);

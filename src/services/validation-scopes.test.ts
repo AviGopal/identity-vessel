@@ -2,7 +2,7 @@
  * Tests for F-NN-I: DB-backed scope lookup for API-key auth.
  *
  * Covers:
- *   - validateKey() returns scopes from the api_keys row when present
+ *   - validateKey() returns scopes from the api_key row when present
  *   - admin scope flows through end-to-end
  *   - Falls back to default scopes when row is missing
  *   - Falls back to default scopes when DB throws
@@ -87,9 +87,9 @@ describe('F-NN-I: DB-backed scope lookup', () => {
   test('validateKey leaves scopes undefined when DB row has no scopes field', async () => {
     const generated = generateApiKey('metabob', 'users:alice', {});
 
-    // Simulates current user-vessel schema: api_keys row exists but has no
+    // Simulates current user-vessel schema: api_key row exists but has no
     // scopes column at all.
-    setQueryFn(async () => [{ id: 'api_keys:abc', key_prefix: 'key_xyz' }]);
+    setQueryFn(async () => [{ id: 'api_key:abc', key_prefix: 'key_xyz' }]);
 
     const result = await validateKey(generated.key);
 

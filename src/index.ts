@@ -665,13 +665,13 @@ app.post('/v1/keys/generate', async (c) => {
 
 // ============================================================================
 // API Key Issuance Endpoint (admin-only; persists to identity-vessel-owned
-// api_keys table)
+// api_key table)
 // ============================================================================
 
 /**
  * POST /v1/keys/issue
  *
- * Mints a new API key AND persists the metadata row to the api_keys table
+ * Mints a new API key AND persists the metadata row to the api_key table
  * (identity-vessel ownership, see sql/migrations/001-api-keys.surql).
  *
  * Differs from /v1/keys/generate in three ways:
@@ -752,7 +752,7 @@ app.post('/v1/keys/validate', createRateLimitMiddleware('keys_validate', 100), a
     const { api_key } = validateKeySchema.parse(body);
 
     // Step 1: Validate format, HMAC signature, AND DB-backed scopes (F-NN-I).
-    // validateKey() merges format + signature checks with a graceful api_keys
+    // validateKey() merges format + signature checks with a graceful api_key
     // row lookup so admin-scoped keys flow through to the response.  Returns
     // scopes=undefined when no row/no scopes column — we fall back to legacy
     // default below.

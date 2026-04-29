@@ -1,7 +1,7 @@
 /**
  * Issue API Key resolver — admin-only key minting.
  *
- * Mints a canonical HMAC-signed API key, persists the row in api_keys, and
+ * Mints a canonical HMAC-signed API key, persists the row in api_key, and
  * returns the full key (returned ONCE; only the SHA-256 hash is stored).
  *
  * Auth: caller presents either an ApiKey with "admin" scope (DB-backed via
@@ -43,7 +43,7 @@ export interface IssueKeyRequest {
 export interface IssueKeySuccess {
   ok: true;
   key: string;            // returned ONCE; never persisted
-  key_id: string;         // HMAC-embedded keyId, also the api_keys record id
+  key_id: string;         // HMAC-embedded keyId, also the api_key record id
   expires_at?: string;
 }
 
@@ -170,7 +170,7 @@ export async function issueApiKey(
   try {
     const query = await getQueryFn();
     await query(
-      `CREATE type::thing("api_keys", $key_id) SET
+      `CREATE type::thing("api_key", $key_id) SET
         key_hash = $key_hash,
         org_id = type::thing("organizations", string::replace($org_id, "organizations:", "")),
         user_id = type::thing("users", string::replace($user_id, "users:", "")),
@@ -188,7 +188,7 @@ export async function issueApiKey(
       },
     );
   } catch (err) {
-    return fail(500, 'PERSIST_FAILED', err instanceof Error ? err.message : 'Failed to persist api_keys row');
+    return fail(500, 'PERSIST_FAILED', err instanceof Error ? err.message : 'Failed to persist api_key row');
   }
 
   return {

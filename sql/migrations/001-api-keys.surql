@@ -1,22 +1,22 @@
--- identity-vessel — api_keys ownership migration
+-- identity-vessel — api_key ownership migration
 --
--- Takes ownership of the api_keys schema from metabob-activity-api/sql/schemas/
+-- Takes ownership of the api_key schema from metabob-activity-api/sql/schemas/
 -- 049-api-key-direct-auth.surql per the architectural realignment. Idempotent
 -- via DEFINE … OVERWRITE; safe to re-run on the deployed canary table.
 --
+-- TABLE NAME: `api_key` (singular). The plural `api_keys` was a stray declared
+-- by user-vessel that never matched runtime usage; activity-api created and
+-- the runtime auth path uses `api_key` (singular).
+--
 -- Identity-vessel owns: table, PERMISSIONS, key_hash, org_id, user_id, scopes
--- (+ scopes.*), created_at, expires_at, last_used_at, is_active, and the three
--- core indices.
+-- (+ scopes.*), name, created_at, expires_at, last_used_at, is_active, key_id,
+-- key_prefix, and indices including the F-NN-I lookup index on key_id.
 --
--- user-vessel owns (in user-vessel/sql/004-api-keys-scopes-and-key-id.surql):
--- the optional key_id field + idx_api_keys_key_id index. NOT redefined here.
---
--- org_id and user_id are typed as record<organizations> / record<users> to
--- match the deployed canary schema (which differs from user-vessel's own
--- api_keys variant in 001-init-schema.surql that uses TYPE string).
--- Reconciliation is out of scope; canary is the source of truth.
+-- F-NN-H: org_id and user_id are TYPE string holding record-reference-as-string
+-- (e.g., "organizations:metabob", "users:abc"). Matches the deployed canary
+-- schema for `api_key` (singular).
 
-DEFINE TABLE OVERWRITE api_keys SCHEMAFULL
+DEFINE TABLE OVERWRITE api_key SCHEMAFULL
   PERMISSIONS
     -- Tenant-scoped read; honors both $auth (JWT) and $token (API-key) paths.
     FOR select WHERE org_id = $auth.org_id OR org_id = $token.org_id
@@ -32,26 +32,39 @@ DEFINE TABLE OVERWRITE api_keys SCHEMAFULL
         OR user_id = $token.user_id
       );
 
-DEFINE FIELD OVERWRITE key_hash ON api_keys TYPE string
+DEFINE FIELD OVERWRITE key_hash ON api_key TYPE string
   ASSERT $value != NONE;
 
-DEFINE FIELD OVERWRITE org_id ON api_keys TYPE record<organizations>
-  VALUE $value OR $auth.org_id
-  ASSERT $value != NONE;
+DEFINE FIELD OVERWRITE org_id ON api_key TYPE string
+  ASSERT $value != NONE AND string::starts_with($value, "organizations:");
 
-DEFINE FIELD OVERWRITE user_id ON api_keys TYPE record<users>
-  VALUE $value
-  ASSERT $value != NONE;
+DEFINE FIELD OVERWRITE user_id ON api_key TYPE option<string>
+  ASSERT $value = NONE OR string::starts_with($value, "users:");
 
-DEFINE FIELD OVERWRITE scopes ON api_keys TYPE array<string> DEFAULT [];
-DEFINE FIELD OVERWRITE scopes.* ON api_keys TYPE string;
+DEFINE FIELD OVERWRITE scopes ON api_key TYPE array<string> DEFAULT [];
+DEFINE FIELD OVERWRITE scopes.* ON api_key TYPE string;
 
-DEFINE FIELD OVERWRITE created_at ON api_keys TYPE datetime
+DEFINE FIELD OVERWRITE name ON api_key TYPE option<string>;
+
+DEFINE FIELD OVERWRITE created_at ON api_key TYPE datetime
   DEFAULT time::now();
-DEFINE FIELD OVERWRITE expires_at ON api_keys TYPE option<datetime>;
-DEFINE FIELD OVERWRITE last_used_at ON api_keys TYPE option<datetime>;
-DEFINE FIELD OVERWRITE is_active ON api_keys TYPE bool DEFAULT true;
+DEFINE FIELD OVERWRITE updated_at ON api_key TYPE datetime
+  DEFAULT time::now();
+DEFINE FIELD OVERWRITE expires_at ON api_key TYPE option<datetime>;
+DEFINE FIELD OVERWRITE last_used_at ON api_key TYPE option<datetime>;
+DEFINE FIELD OVERWRITE is_active ON api_key TYPE bool DEFAULT true;
 
-DEFINE INDEX OVERWRITE idx_api_key_hash ON api_keys FIELDS key_hash UNIQUE;
-DEFINE INDEX OVERWRITE idx_api_key_org ON api_keys FIELDS org_id;
-DEFINE INDEX OVERWRITE idx_api_key_user ON api_keys FIELDS user_id;
+-- key_id: HMAC-embedded keyId from the canonical mb-<base64>-<hmac> payload.
+-- Used by validation.ts:lookupKeyScopes to find the row when the SurrealDB
+-- record id wasn't pre-set to match.
+DEFINE FIELD OVERWRITE key_id ON api_key TYPE option<string>;
+
+-- key_prefix: human/admin-friendly handle for the key (e.g., "key_avi_canary_admin01").
+-- Independent of key_id; allows ops scripts to look up by stable label.
+DEFINE FIELD OVERWRITE key_prefix ON api_key TYPE option<string>;
+
+DEFINE INDEX OVERWRITE idx_api_key_hash ON api_key FIELDS key_hash UNIQUE;
+DEFINE INDEX OVERWRITE idx_api_key_org ON api_key FIELDS org_id;
+DEFINE INDEX OVERWRITE idx_api_key_user ON api_key FIELDS user_id;
+DEFINE INDEX OVERWRITE idx_api_key_key_id ON api_key FIELDS key_id;
+DEFINE INDEX OVERWRITE idx_api_key_key_prefix ON api_key FIELDS key_prefix;
