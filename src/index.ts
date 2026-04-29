@@ -566,6 +566,56 @@ app.post('/v1/auth/signup', createRateLimitMiddleware('auth_signup', 5), async (
   return c.json(result.body, result.status as any);
 });
 
+// GET /v1/auth/me — return user record + JWT claims for a Bearer token.
+//
+// Used by the cloud-dashboard's restoreSession flow on page reload to verify
+// the persisted token is still valid AND hydrate the User UI (email, name)
+// from the source of truth instead of trusting stale sessionStorage. Reuses
+// `resolveAuthentication` for JWT validation, then SELECTs the users row for
+// email/name. Response shape matches LoginResponse.user so the dashboard
+// can store it directly.
+app.get('/v1/auth/me', async (c) => {
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return c.json({ error: 'missing_bearer_token' }, 401);
+  }
+  const token = authHeader.slice('Bearer '.length);
+  const result = await resolveAuthentication({
+    pointer: { type: 'session', token },
+  } as AuthenticationImpulse);
+  if (!result.authenticated || !result.userId) {
+    return c.json({ error: 'invalid_token', reason: result.reason }, 401);
+  }
+
+  // Hydrate email + name from the users row. Errors are non-fatal — fall
+  // through to the JWT-only response so the UI still renders post-reload.
+  let email = '';
+  let name = '';
+  try {
+    const { query } = await import('./db/surrealdb');
+    const rows = await query(
+      'SELECT email, name FROM users WHERE <string>id = $user_id LIMIT 1;',
+      { user_id: result.userId },
+    );
+    const row = Array.isArray(rows) && Array.isArray(rows[0]) ? rows[0][0] : (rows as any)?.[0];
+    if (row && typeof row === 'object') {
+      email = typeof row.email === 'string' ? row.email : '';
+      name = typeof row.name === 'string' ? row.name : '';
+    }
+  } catch (err) {
+    console.warn('[auth/me] users lookup failed', err instanceof Error ? err.message : err);
+  }
+
+  return c.json({
+    id: result.userId,
+    email,
+    name,
+    org_id: result.orgId ?? '',
+    role: 'member',
+    ...(result.accountId ? { account_id: result.accountId } : {}),
+  });
+});
+
 // ============================================================================
 // MiniBob Instance Authentication - DEPRECATED
 // ============================================================================
