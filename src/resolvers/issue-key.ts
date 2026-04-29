@@ -1,0 +1,200 @@
+/**
+ * Issue API Key resolver — admin-only key minting.
+ *
+ * Mints a canonical HMAC-signed API key, persists the row in api_keys, and
+ * returns the full key (returned ONCE; only the SHA-256 hash is stored).
+ *
+ * Auth: caller presents either an ApiKey with "admin" scope (DB-backed via
+ * F-NN-I lookupKeyScopes) or a Bearer JWT with role=admin/owner. Authorization
+ * lives in this resolver (not middleware) so unit tests can exercise the full
+ * flow without spinning up Hono.
+ */
+
+import { generateApiKey } from '../services/keyGeneration';
+import { validateKey } from '../services/validation';
+import { isKeyRevoked } from '../db/redis';
+import { verify as verifyJwt } from 'hono/jwt';
+import { createHash } from 'crypto';
+
+type QueryFn = (sql: string, params?: Record<string, any>) => Promise<any>;
+let queryOverride: QueryFn | null = null;
+
+/** Test-only: substitute the SurrealDB query function. Pass null to reset. */
+export function setQueryFn(fn: QueryFn | null): void {
+  queryOverride = fn;
+}
+
+async function getQueryFn(): Promise<QueryFn> {
+  if (queryOverride) return queryOverride;
+  const mod = await import('../db/surrealdb');
+  return mod.query as QueryFn;
+}
+
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
+
+export interface IssueKeyRequest {
+  user_id: string;        // record reference, e.g. "users:abc123"
+  org_id: string;         // record reference, e.g. "organizations:metabob"
+  scopes?: string[];      // default ["read","write"]
+  expires_in_days?: number;
+  name?: string;
+}
+
+export interface IssueKeySuccess {
+  ok: true;
+  key: string;            // returned ONCE; never persisted
+  key_id: string;         // HMAC-embedded keyId, also the api_keys record id
+  expires_at?: string;
+}
+
+export type FailureCode =
+  | 'INVALID_INPUT'
+  | 'MISSING_AUTH_HEADER'
+  | 'INVALID_AUTH_SCHEME'
+  | 'INVALID_API_KEY'
+  | 'REVOKED_API_KEY'
+  | 'INVALID_JWT'
+  | 'FORBIDDEN'
+  | 'PERSIST_FAILED';
+
+export interface IssueKeyFailure {
+  ok: false;
+  status: number;
+  code: FailureCode;
+  message: string;
+}
+
+export type IssueKeyResult = IssueKeySuccess | IssueKeyFailure;
+
+function fail(status: number, code: FailureCode, message: string): IssueKeyFailure {
+  return { ok: false, status, code, message };
+}
+
+async function authorizeAdmin(
+  authHeader: string | undefined,
+): Promise<{ ok: true } | IssueKeyFailure> {
+  if (!authHeader) return fail(401, 'MISSING_AUTH_HEADER', 'Missing Authorization header');
+
+  if (authHeader.startsWith('ApiKey ')) {
+    const apiKey = authHeader.slice('ApiKey '.length);
+    const validation = await validateKey(apiKey);
+    if (!validation.valid) return fail(401, 'INVALID_API_KEY', validation.error || 'Invalid API key');
+    if (validation.keyId && (await isKeyRevoked(validation.keyId))) {
+      return fail(401, 'REVOKED_API_KEY', 'API key has been revoked');
+    }
+    if (!(validation.scopes || []).includes('admin')) {
+      return fail(403, 'FORBIDDEN', 'API key does not have admin scope');
+    }
+    return { ok: true };
+  }
+
+  if (authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice('Bearer '.length);
+    let payload: any;
+    try {
+      payload = await verifyJwt(token, JWT_SECRET, 'HS256');
+    } catch (err) {
+      return fail(401, 'INVALID_JWT', err instanceof Error ? err.message : 'JWT verification failed');
+    }
+    const role = (payload?.role as string | undefined) ?? '';
+    if (role !== 'admin' && role !== 'owner') return fail(403, 'FORBIDDEN', 'JWT role is not admin');
+    return { ok: true };
+  }
+
+  return fail(401, 'INVALID_AUTH_SCHEME', 'Authorization must start with "ApiKey " or "Bearer "');
+}
+
+function validateInput(body: unknown): IssueKeyRequest | IssueKeyFailure {
+  if (!body || typeof body !== 'object') {
+    return fail(400, 'INVALID_INPUT', 'Request body must be a JSON object');
+  }
+  const b = body as Record<string, unknown>;
+
+  if (typeof b.user_id !== 'string' || b.user_id.length === 0) {
+    return fail(400, 'INVALID_INPUT', 'user_id must be a non-empty string (record reference)');
+  }
+  if (typeof b.org_id !== 'string' || b.org_id.length === 0) {
+    return fail(400, 'INVALID_INPUT', 'org_id must be a non-empty string (record reference)');
+  }
+
+  let scopes: string[] | undefined;
+  if (b.scopes !== undefined) {
+    if (!Array.isArray(b.scopes) || b.scopes.some((s) => typeof s !== 'string')) {
+      return fail(400, 'INVALID_INPUT', 'scopes must be an array of strings');
+    }
+    scopes = b.scopes as string[];
+  }
+
+  let expires_in_days: number | undefined;
+  if (b.expires_in_days !== undefined) {
+    if (typeof b.expires_in_days !== 'number' || b.expires_in_days <= 0) {
+      return fail(400, 'INVALID_INPUT', 'expires_in_days must be a positive number');
+    }
+    expires_in_days = b.expires_in_days;
+  }
+
+  return {
+    user_id: b.user_id,
+    org_id: b.org_id,
+    scopes,
+    expires_in_days,
+    name: typeof b.name === 'string' ? b.name : undefined,
+  };
+}
+
+/** Issue a new API key. Admin-only. */
+export async function issueApiKey(
+  body: unknown,
+  authHeader: string | undefined,
+): Promise<IssueKeyResult> {
+  const authz = await authorizeAdmin(authHeader);
+  if ('status' in authz) return authz;
+
+  const validated = validateInput(body);
+  if ('status' in validated) return validated;
+
+  const scopes = validated.scopes ?? ['read', 'write'];
+
+  const generated = generateApiKey(validated.org_id, validated.user_id, {
+    name: validated.name,
+    scopes,
+    expiresInDays: validated.expires_in_days,
+  });
+
+  const keyHash = createHash('sha256').update(generated.key).digest('hex');
+
+  // id is the HMAC-embedded keyId so lookupKeyScopes() resolves the row by the
+  // identifier embedded in subsequent ApiKey auth headers. org_id and user_id
+  // are typed as record<organizations>/record<users> per the canary schema, so
+  // we coerce string references via type::thing.
+  try {
+    const query = await getQueryFn();
+    await query(
+      `CREATE type::thing("api_keys", $key_id) SET
+        key_hash = $key_hash,
+        org_id = type::thing("organizations", string::replace($org_id, "organizations:", "")),
+        user_id = type::thing("users", string::replace($user_id, "users:", "")),
+        scopes = $scopes,
+        created_at = time::now(),
+        is_active = true,
+        expires_at = $expires_at;`,
+      {
+        key_id: generated.keyId,
+        key_hash: keyHash,
+        org_id: validated.org_id,
+        user_id: validated.user_id,
+        scopes,
+        expires_at: generated.expiresAt ?? null,
+      },
+    );
+  } catch (err) {
+    return fail(500, 'PERSIST_FAILED', err instanceof Error ? err.message : 'Failed to persist api_keys row');
+  }
+
+  return {
+    ok: true,
+    key: generated.key,
+    key_id: generated.keyId,
+    expires_at: generated.expiresAt,
+  };
+}

@@ -33,9 +33,13 @@
  *   Response: { valid, errors[], score }
  *
  * API Key Endpoints:
- * - POST /v1/keys/generate    - Generate new API key
+ * - POST /v1/keys/generate    - Generate new API key (no DB persistence)
  *   Request:  { org_id, user_id, scopes[]?, key_type?: "live"|"test", name?, expires_in_days? }
  *   Response: { api_key, key_id, prefix, expires_at?, metadata }
+ *
+ * - POST /v1/keys/issue       - Mint new API key AND persist row (admin-only)
+ *   Request:  { user_id, org_id, scopes[]?, expires_in_days?, name? }
+ *   Response: { key, key_id, expires_at? }
  *
  * - POST /v1/keys/validate    - Validate API key (direct call)
  *   Request:  { api_key }
@@ -62,6 +66,7 @@ import { generateApiKey, generateKeyMetadata } from './services/keyGeneration';
 import { validateKeyFormat, validateKey, parseApiKey } from './services/validation';
 import { revokeKey, isKeyRevoked } from './db/redis';
 import { config } from './services/config';
+import { issueApiKey } from './resolvers/issue-key';
 import { z } from 'zod';
 import { generateToken, verifyToken, getSecretInfo } from './services/jwt';
 import { hashPassword, verifyPassword, validatePassword } from './services/password';
@@ -140,6 +145,7 @@ app.get('/capabilities', (c) => {
       'POST /v1/auth/password/validate - Validate password strength',
       // API Key Management (canonical source of truth)
       'POST /v1/keys/generate - Generate new API key with HMAC signature',
+      'POST /v1/keys/issue - Mint new API key + persist row (admin-only)',
       'POST /v1/keys/validate - Validate API key (format, signature, revocation)',
       'POST /v1/keys/revoke - Revoke an API key',
       // Authentication Resolution
@@ -658,6 +664,73 @@ app.post('/v1/keys/generate', async (c) => {
 });
 
 // ============================================================================
+// API Key Issuance Endpoint (admin-only; persists to identity-vessel-owned
+// api_keys table)
+// ============================================================================
+
+/**
+ * POST /v1/keys/issue
+ *
+ * Mints a new API key AND persists the metadata row to the api_keys table
+ * (identity-vessel ownership, see sql/migrations/001-api-keys.surql).
+ *
+ * Differs from /v1/keys/generate in three ways:
+ *   1. Admin-only — caller must present an ApiKey with `admin` scope or a
+ *      Bearer JWT with `role: admin`.
+ *   2. Persists the row directly; the caller does not need a separate
+ *      user-vessel POST to record metadata.
+ *   3. Uses the HMAC-embedded keyId as the SurrealDB record id, so
+ *      `lookupKeyScopes()` (F-NN-I) resolves the row by the same identifier
+ *      embedded in subsequent ApiKey auth headers.
+ *
+ * Request body:
+ *   {
+ *     "user_id": "users:<id>",            // required, record reference
+ *     "org_id":  "organizations:<id>",    // required, record reference
+ *     "scopes":  ["read","write","admin"], // optional, default ["read","write"]
+ *     "expires_in_days": 30,              // optional
+ *     "name": "string"                    // optional
+ *   }
+ *
+ * Success response:
+ *   { ok: true, key: "<full-canonical-key>", key_id: "<keyId>", expires_at?: "..." }
+ *
+ * The full key is returned ONCE; only the SHA-256 hash is stored.
+ */
+app.post('/v1/keys/issue', async (c) => {
+  let body: unknown = {};
+  try {
+    body = await c.req.json();
+  } catch {
+    body = {};
+  }
+
+  const authHeader = c.req.header('Authorization');
+  const result = await issueApiKey(body, authHeader);
+
+  if (!result.ok) {
+    return c.json(
+      {
+        success: false,
+        error: { code: result.code, message: result.message },
+      },
+      result.status as any,
+    );
+  }
+
+  console.log('[KeyIssuance] Issued key:', { key_id: result.key_id });
+
+  return c.json({
+    success: true,
+    data: {
+      key: result.key,
+      key_id: result.key_id,
+      expires_at: result.expires_at,
+    },
+  });
+});
+
+// ============================================================================
 // API Key Validation Endpoint (canonical source of truth)
 // ============================================================================
 
@@ -868,6 +941,40 @@ const server = {
   port: config.port,
   fetch: app.fetch
 };
+
+// ============================================================================
+// Schema Bootstrap (identity-vessel-owned tables)
+// ============================================================================
+//
+// Off by default — production Helm charts run schema migrations through a
+// dedicated init container.  Local dev sets SCHEMA_AUTOAPPLY=true so the
+// vessel applies its own migrations on startup.  Each migration file uses
+// DEFINE … OVERWRITE so a re-run is safe.
+
+if ((process.env.SCHEMA_AUTOAPPLY || 'false').toLowerCase() === 'true') {
+  (async () => {
+    const { query } = await import('./db/surrealdb');
+    const migrations = ['001-api-keys.surql'];
+    for (const file of migrations) {
+      try {
+        const sql = await Bun.file(`${import.meta.dir}/../sql/migrations/${file}`).text();
+        await query(sql);
+        console.log('[Schema] applied', { file });
+      } catch (err) {
+        // Non-fatal — log and continue.  An init-container or operator-run
+        // migration is expected to have placed the schema in production.
+        console.warn('[Schema] apply failed (may already be applied)', {
+          file,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  })().catch((err) => {
+    console.warn('[Schema] bootstrap error', {
+      err: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
 
 // ============================================================================
 // Discovery Vessel Integration (with bootstrap delay)
