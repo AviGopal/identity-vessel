@@ -5,7 +5,7 @@
  *   1. validateKeyFormat()  — synchronous, format + HMAC only (no DB).
  *   2. validateKey()        — async, format + HMAC + DB-backed scope lookup.
  *
- * F-NN-I (2026-04-28): API-key auth previously hardcoded `scopes: ['read','write']`,
+ * Background: API-key auth previously hardcoded `scopes: ['read','write']`,
  * making admin operations dispatched via API key impossible.  validateKey()
  * now reads the `scopes` field from the api_key row (when present) so admin-
  * scoped keys can authenticate destructive operations.  When the row is
@@ -188,9 +188,9 @@ export function validateKeyFormat(apiKey: string): ValidationResult {
  *   1. Direct record-id lookup (id = api_key:<keyId>)
  *   2. key_prefix field match (current user-vessel schema uses this)
  *
- * If the row does not have a `scopes` field at all (current schema does not
- * define one yet — see F-NN-I in the project CLAUDE.md), null is returned and
- * the caller falls back to the legacy default.
+ * If the row does not have a `scopes` field at all (the current schema does
+ * not define one yet), null is returned and the caller falls back to the
+ * legacy default.
  */
 export async function lookupKeyScopes(keyId: string): Promise<string[] | null> {
   if (!keyId) return null;

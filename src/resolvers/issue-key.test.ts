@@ -157,7 +157,7 @@ describe('issueApiKey — admin-only key issuance', () => {
     expect(issued.ok).toBe(true);
     if (!issued.ok) return;
 
-    // Simulate the persisted row backing F-NN-I lookupKeyScopes.
+    // Simulate the persisted row backing lookupKeyScopes.
     setValidationQueryFn(async (_sql, params) => {
       expect(params?.key_id).toBe(issued.key_id);
       return [{ scopes: ['read', 'write'] }];

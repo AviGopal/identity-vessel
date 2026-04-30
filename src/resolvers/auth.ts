@@ -114,7 +114,7 @@ async function resolveJWT(token: string): Promise<AuthenticationResult> {
  * Resolve API key
  */
 async function resolveAPIKey(apiKey: string): Promise<AuthenticationResult> {
-  // Validate format, signature, and look up DB-backed scopes (F-NN-I).
+  // Validate format, signature, and look up DB-backed scopes.
   // validateKey returns scopes from the api_key row when present; otherwise
   // scopes is left undefined and we fall back to the legacy default below.
   const validation = await validateKey(apiKey);

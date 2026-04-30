@@ -32,7 +32,7 @@
  *   Request:  { password }
  *   Response: { valid, errors[], score }
  *
- * Sign-in Endpoints (Phase 9 / F-NN-K):
+ * Sign-in Endpoints (email+password):
  * - POST /v1/auth/login       - Email + password sign-in → JWT
  *   Request:  { email, password }
  *   Response: { token, user_id, org_id, role, account_id?, expires_at }
@@ -153,7 +153,7 @@ app.get('/capabilities', (c) => {
       'POST /v1/auth/password/hash - Hash password with Argon2id',
       'POST /v1/auth/password/verify - Verify password against hash',
       'POST /v1/auth/password/validate - Validate password strength',
-      // Sign-in flow (Phase 9 / F-NN-K)
+      // Sign-in flow (email+password)
       'POST /v1/auth/login - Email+password sign-in → JWT',
       'POST /v1/auth/signup - Create user+org → JWT',
       // API Key Management (canonical source of truth)
@@ -538,7 +538,7 @@ app.post('/v1/auth/password/validate', async (c) => {
 });
 
 // ============================================================================
-// Email + Password Sign-in (Phase 9 / F-NN-K)
+// Email + Password Sign-in (email+password)
 // ============================================================================
 //
 // POST /v1/auth/login   { email, password }
@@ -772,7 +772,7 @@ app.post('/v1/keys/generate', async (c) => {
  *   2. Persists the row directly; the caller does not need a separate
  *      user-vessel POST to record metadata.
  *   3. Uses the HMAC-embedded keyId as the SurrealDB record id, so
- *      `lookupKeyScopes()` (F-NN-I) resolves the row by the same identifier
+ *      `lookupKeyScopes()` resolves the row by the same identifier
  *      embedded in subsequent ApiKey auth headers.
  *
  * Request body:
@@ -843,7 +843,7 @@ app.post('/v1/keys/validate', createRateLimitMiddleware('keys_validate', 100), a
     const body = await c.req.json();
     const { api_key } = validateKeySchema.parse(body);
 
-    // Step 1: Validate format, HMAC signature, AND DB-backed scopes (F-NN-I).
+    // Step 1: Validate format, HMAC signature, AND DB-backed scopes.
     // validateKey() merges format + signature checks with a graceful api_key
     // row lookup so admin-scoped keys flow through to the response.  Returns
     // scopes=undefined when no row/no scopes column — we fall back to legacy

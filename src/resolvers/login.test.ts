@@ -1,5 +1,5 @@
 /**
- * Tests for the email+password login & signup resolver (Phase 9 / F-NN-K).
+ * Tests for the email+password login & signup resolver.
  *
  * SurrealDB and Redis are mocked at module load. Constant-time dummy hashing
  * is disabled via NODE_ENV=test (see resolvers/login.ts).

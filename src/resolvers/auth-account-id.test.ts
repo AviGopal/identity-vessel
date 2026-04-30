@@ -33,8 +33,8 @@ mock.module('../services/trace', () => ({
   sendAuthenticationTrace: async () => {},
 }));
 
-// Stub the SurrealDB module — F-NN-I added a DB-backed scope lookup in
-// validateKey() which tries to connect to SurrealDB on every API-key
+// Stub the SurrealDB module — validateKey() includes a DB-backed scope lookup in
+// which tries to connect to SurrealDB on every API-key
 // resolution. With no DB reachable in tests, the connect attempt blocks
 // until the per-test timeout. Returning [] preserves the legacy default-
 // scopes fallback path that this test suite was written against.

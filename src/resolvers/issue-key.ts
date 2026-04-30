@@ -5,7 +5,7 @@
  * returns the full key (returned ONCE; only the SHA-256 hash is stored).
  *
  * Auth: caller presents either an ApiKey with "admin" scope (DB-backed via
- * F-NN-I lookupKeyScopes) or a Bearer JWT with role=admin/owner. Authorization
+ * lookupKeyScopes) or a Bearer JWT with role=admin/owner. Authorization
  * lives in this resolver (not middleware) so unit tests can exercise the full
  * flow without spinning up Hono.
  */
@@ -167,8 +167,7 @@ export async function issueApiKey(
   // entirely and use the auto-generated id, persisting the HMAC-embedded keyId
   // separately as `key_id` (indexed) so `lookupKeyScopes()` can find it.
   // The deployed `api_key` schema (per identity-vessel migration 001) types
-  // `org_id` and `user_id` as TYPE string (F-NN-H pattern), so we pass them
-  // through verbatim.
+  // `org_id` and `user_id` as TYPE string, so we pass them through verbatim.
   // The api_key.expires_at schema field is `none | datetime` — passing NULL
   // fails coercion. Omit the SET clause entirely when no expiration is set so
   // the field defaults to NONE.

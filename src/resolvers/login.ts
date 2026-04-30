@@ -1,5 +1,5 @@
 /**
- * Email + password login & signup resolver (Phase 9 / F-NN-K).
+ * Email + password login & signup resolver.
  *
  * Implements the end-to-end sign-in flow the cloud-dashboard proxy targets
  * (`POST /api/auth/{login,signup}` → identity-vessel `POST /v1/auth/...`).

@@ -1,5 +1,5 @@
 /**
- * Tests for F-NN-I: DB-backed scope lookup for API-key auth.
+ * Tests for DB-backed scope lookup for API-key auth.
  *
  * Covers:
  *   - validateKey() returns scopes from the api_key row when present
@@ -21,7 +21,7 @@ import {
 } from './validation';
 import { generateApiKey } from './keyGeneration';
 
-describe('F-NN-I: DB-backed scope lookup', () => {
+describe('DB-backed scope lookup', () => {
   beforeEach(() => {
     setQueryFn(null);
   });
