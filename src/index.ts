@@ -70,7 +70,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { resolveAuthentication } from './resolvers/auth';
-import type { AuthenticationImpulse } from './types';
+import type { AuthenticationImpulse, AuthenticationResult } from './types';
 import { generateApiKey, generateKeyMetadata } from './services/keyGeneration';
 import { validateKeyFormat, validateKey, parseApiKey } from './services/validation';
 import { revokeKey, isKeyRevoked } from './db/redis';
@@ -79,6 +79,7 @@ import { issueApiKey } from './resolvers/issue-key';
 import { loginWithPassword, signupWithPassword } from './resolvers/login';
 import { z } from 'zod';
 import { generateToken, verifyToken, getSecretInfo } from './services/jwt';
+import type { GenerateTokenOptions } from './services/jwt';
 import { hashPassword, verifyPassword, validatePassword } from './services/password';
 import { createRateLimitMiddleware } from './middleware/ratelimit';
 
@@ -242,9 +243,32 @@ app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 20), asyn
         }, 401);
       }
 
+      // Mint a SurrealDB-acceptable JWT inline so callers (notably
+      // activity-api) can authenticate against the `apikey_token` ACCESS
+      // schema without a second round-trip to /v1/jwt/generate. The mint is
+      // best-effort: failure logs a warning and falls through to the
+      // legacy payload so older callers that don't read `data.jwt` keep
+      // working.
+      const data: AuthenticationResult & { jwt?: string; jwt_expires_at?: string } = { ...result };
+      try {
+        const jwt = await generateToken({
+          user_id: result.userId!,
+          org_id: result.orgId!,
+          role: ((result as any).role as GenerateTokenOptions['role']) || 'user',
+          project_ids: [],
+          account_id: result.accountId,
+          expires_in_seconds: 900,
+        });
+        data.jwt = jwt.token;
+        data.jwt_expires_at = jwt.expires_at;
+      } catch (mintErr) {
+        console.warn('[auth/resolve] inline JWT mint failed (nested form):',
+          mintErr instanceof Error ? mintErr.message : mintErr);
+      }
+
       return c.json({
         success: true,
-        data: result
+        data
       });
     }
 
@@ -292,12 +316,32 @@ app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 20), asyn
     // Flat snake-case response — matches user-vessel's IdentityClient contract.
     // role is unknown to identity-vessel (user-vessel owns roles); default to
     // `member` so the consumer's required-role check has a sane baseline.
+    let jwt: string | undefined;
+    let jwt_expires_at: string | undefined;
+    try {
+      const minted = await generateToken({
+        user_id: result.userId!,
+        org_id: result.orgId!,
+        role: 'member',
+        project_ids: [],
+        account_id: result.accountId,
+        expires_in_seconds: 900,
+      });
+      jwt = minted.token;
+      jwt_expires_at = minted.expires_at;
+    } catch (mintErr) {
+      console.warn('[auth/resolve] inline JWT mint failed (flat form):',
+        mintErr instanceof Error ? mintErr.message : mintErr);
+    }
+
     return c.json({
       valid: true,
       user_id: result.userId,
       org_id: result.orgId,
       account_id: result.accountId,
       role: 'member',
+      jwt,
+      jwt_expires_at,
     });
   } catch (error) {
     return c.json({

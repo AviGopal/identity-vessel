@@ -28,9 +28,17 @@ export interface MetabobJWTClaims extends JWTPayload {
   // Metabob-specific claims
   org_id: string;    // Organization ID
   user_id: string;   // User ID (same as sub for clarity)
-  role: string;      // User role (admin, member, viewer, owner)
+  role: string;      // User role (admin, member, viewer, owner, user)
   project_ids: string[]; // Accessible project IDs
   account_id?: string;   // Optional: caller's default account (record-reference-as-string, e.g. "accounts:metabob")
+
+  /**
+   * SurrealDB ACCESS method name. Required by SurrealDB to authenticate a JWT
+   * against an ACCESS schema (e.g. `apikey_token`). Without this claim,
+   * `db.authenticate(token)` will reject the token even if the signature and
+   * expiration are valid.
+   */
+  AC?: string;
 }
 
 /**
@@ -44,10 +52,17 @@ export interface MetabobJWTClaims extends JWTPayload {
 export interface GenerateTokenOptions {
   user_id: string;
   org_id: string;
-  role: 'admin' | 'member' | 'viewer' | 'owner';
+  role: 'admin' | 'member' | 'viewer' | 'owner' | 'user';
   project_ids?: string[];
   account_id?: string;
   expires_in_seconds?: number; // Default: 900 (15 minutes)
+  /**
+   * SurrealDB ACCESS method name written into the `AC` claim. Defaults to
+   * `apikey_token`, which is the ACCESS schema used by activity-api and other
+   * vessels that authenticate API-key-derived JWTs against SurrealDB. Pass an
+   * explicit value if minting a token for a different ACCESS method.
+   */
+  access?: string;
 }
 
 /**
@@ -88,6 +103,7 @@ export async function generateToken(options: GenerateTokenOptions): Promise<Gene
     project_ids = [],
     account_id,
     expires_in_seconds = 900, // 15 minutes default
+    access = 'apikey_token',
   } = options;
 
   const now = Math.floor(Date.now() / 1000);
@@ -102,6 +118,7 @@ export async function generateToken(options: GenerateTokenOptions): Promise<Gene
     user_id,
     role,
     project_ids,
+    AC: access,
   };
   if (account_id) {
     payload.account_id = account_id;
