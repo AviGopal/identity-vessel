@@ -1,4 +1,4 @@
--- identity-vessel — users.password_hash field migration (F-NN-K, Phase 9)
+-- identity-vessel — users.password_hash field migration
 --
 -- The `users` table is owned by user-vessel (sql/001-init-schema.surql), but
 -- per user-vessel's CLAUDE.md ("Don't add password hashing, JWT signing, or

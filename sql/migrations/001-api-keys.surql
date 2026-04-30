@@ -10,9 +10,9 @@
 --
 -- Identity-vessel owns: table, PERMISSIONS, key_hash, org_id, user_id, scopes
 -- (+ scopes.*), name, created_at, expires_at, last_used_at, is_active, key_id,
--- key_prefix, and indices including the F-NN-I lookup index on key_id.
+-- key_prefix, and indices including the lookup index on key_id.
 --
--- F-NN-H: org_id and user_id are TYPE string holding record-reference-as-string
+-- org_id and user_id are TYPE string holding record-reference-as-string
 -- (e.g., "organizations:metabob", "users:abc"). Matches the deployed canary
 -- schema for `api_key` (singular).
 
