@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+#
+# identity-vessel pre-commit hook.
+#
+# Mirrors the metabob-devbob super-repo + deployment-repo hooks with rules
+# tuned for this vessel (TS/Bun auth + JWT issuer). Two layers, in order:
+#
+#   1. Placement check — rejects newly-added or renamed-into entries
+#      (modifying existing tracked files is never blocked).
+#   2. Secrets scan — gitleaks protect --staged.
+#
+# Bypass: `git commit --no-verify`.
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+RED=$'\033[0;31m'
+YELLOW=$'\033[1;33m'
+GREEN=$'\033[0;32m'
+DIM=$'\033[2m'
+NC=$'\033[0m'
+
+ROOT_ALLOWLIST=(
+  CLAUDE.md
+  README.md
+  LICENSE
+  LICENSE.md
+  CHANGELOG.md
+  .gitignore
+  .gitmodules
+  .gitattributes
+  .editorconfig
+  .nvmrc
+  .tool-versions
+  .prettierrc
+  .prettierrc.json
+  .prettierrc.yaml
+  .prettierignore
+  .eslintrc.js
+  .eslintrc.json
+  .eslintignore
+  .dockerignore
+  .env.example
+  bunfig.toml
+  package.json
+  bun.lock
+  package-lock.json
+  yarn.lock
+  pnpm-lock.yaml
+  tsconfig.json
+  tsconfig.build.json
+  vitest.config.ts
+  Dockerfile
+  biome.json
+)
+
+ALLOWED_TOPLEVEL_DIRS=(
+  src
+  test
+  tests
+  docs
+  scripts
+  sql
+  migrations
+  packages
+  .github
+  .minibob
+  cli
+  bin
+)
+
+ARTEFACT_EXTENSIONS='png|jpg|jpeg|gif|webp|svg|bmp|ico|mp4|mov|webm|pdf|zip|tar|gz|tgz'
+
+mapfile -t STAGED < <(git diff --cached --name-only --diff-filter=AR)
+
+if [[ ${#STAGED[@]} -eq 0 ]]; then
+  exit 0
+fi
+
+violations=()
+
+is_root_allowlisted() {
+  local name="$1"
+  for entry in "${ROOT_ALLOWLIST[@]}"; do
+    [[ "$name" == "$entry" ]] && return 0
+  done
+  [[ "$name" == .env.*.example ]] && return 0
+  [[ "$name" == Dockerfile.* ]] && return 0
+  [[ "$name" == tsconfig.*.json ]] && return 0
+  return 1
+}
+
+is_under_allowed_toplevel() {
+  local path="$1"
+  local first="${path%%/*}"
+  for dir in "${ALLOWED_TOPLEVEL_DIRS[@]}"; do
+    [[ "$first" == "$dir" ]] && return 0
+  done
+  return 1
+}
+
+flag() {
+  local file="$1" reason="$2" remedy="$3"
+  violations+=("${file}|${reason}|${remedy}")
+}
+
+for file in "${STAGED[@]}"; do
+  base="$(basename "$file")"
+  ext="${base##*.}"
+  ext_lower="${ext,,}"
+
+  if [[ "$file" == */* ]]; then
+    if ! is_under_allowed_toplevel "$file"; then
+      flag "$file" \
+        "new file in unrecognised top-level directory" \
+        "move under src/, test{,s}/, docs/, scripts/, sql/, migrations/, or packages/"
+      continue
+    fi
+  else
+    if ! is_root_allowlisted "$base"; then
+      case "$base" in
+        *.md)
+          flag "$file" \
+            "new markdown file at vessel root" \
+            "stateless reference docs go in docs/; one-off writeups (status, fix-complete, migration-plan, trace-investigation) go in commit messages, not the tree"
+          ;;
+        *.sh|*.ts|*.tsx|*.js|*.mjs|*.cjs|*.py)
+          flag "$file" \
+            "new script at vessel root" \
+            "operational scripts go in scripts/; source in src/"
+          ;;
+        test-*|*-test.*|*.test.*|tests-*)
+          flag "$file" \
+            "new test file at vessel root" \
+            "tests live in test/ or tests/, never at the vessel root"
+          ;;
+        *.html|*.txt|*.yaml|*.yml|*.json|*.toml|*.surql|*.sql)
+          flag "$file" \
+            "new data/config file at vessel root" \
+            "move under the owning area (src/, scripts/, sql/, migrations/) — root holds project metadata only"
+          ;;
+        *)
+          if [[ "$ext_lower" =~ ^($ARTEFACT_EXTENSIONS)$ ]]; then
+            flag "$file" \
+              "new binary/artefact at vessel root" \
+              "binary assets go in docs/assets/<topic>/"
+          else
+            flag "$file" \
+              "new file at vessel root not in allowlist" \
+              "extend ROOT_ALLOWLIST in scripts/git-hooks/pre-commit only if the file is genuinely vessel-wide metadata"
+          fi
+          ;;
+      esac
+      continue
+    fi
+  fi
+
+  if [[ "$ext_lower" =~ ^($ARTEFACT_EXTENSIONS)$ ]]; then
+    if [[ "$file" != docs/assets/* && "$file" != docs/*/assets/* ]]; then
+      flag "$file" \
+        "binary/artefact outside docs/assets/" \
+        "screenshots are session artefacts (gitignore them); illustrative assets go in docs/assets/<topic>/"
+    fi
+  fi
+done
+
+if [[ ${#violations[@]} -gt 0 ]]; then
+  printf '%s\n' "${RED}━━━ identity-vessel placement check failed ━━━${NC}"
+  printf '%s\n\n' "${DIM}rules: scripts/git-hooks/README.md${NC}"
+
+  for v in "${violations[@]}"; do
+    IFS='|' read -r file reason remedy <<<"$v"
+    printf '  %s%s%s\n' "${YELLOW}✗${NC} " "$file" ""
+    printf '      %sreason:%s %s\n' "$DIM" "$NC" "$reason"
+    printf '      %sfix:   %s %s\n\n' "$DIM" "$NC" "$remedy"
+  done
+
+  cat <<EOF
+${DIM}Why this exists${NC}
+  identity-vessel is the API-key + JWT issuer for the metabob system.
+  Source lives in src/, schema in sql/migrations/, ops scripts in
+  scripts/, stateless docs in docs/. One-off writeups (migration plans
+  with check-marks, trace-pollution fix narratives, status snapshots)
+  belong in commit messages — git log and git blame are your friends.
+
+${DIM}Bypass${NC}
+  git commit --no-verify   ${DIM}(use sparingly)${NC}
+EOF
+
+  exit 1
+fi
+
+if command -v gitleaks >/dev/null 2>&1; then
+  if ! gitleaks protect --staged --redact --no-banner 2>&1; then
+    printf '\n%s\n' "${RED}━━━ gitleaks: secrets detected in staged diff ━━━${NC}"
+    cat <<EOF
+${DIM}What to do${NC}
+  1. Remove the secret from the file before committing.
+  2. Rotate the leaked credential immediately — assume it is compromised.
+  3. False positive? Add ${DIM}# gitleaks:allow${NC} on the line.
+
+${DIM}Bypass${NC}
+  git commit --no-verify   ${DIM}(only after rotating)${NC}
+EOF
+    exit 1
+  fi
+else
+  printf '%s\n' "${YELLOW}note:${NC} gitleaks is not installed; secrets scan was skipped."
+  printf '%s\n' "      install: ${DIM}brew install gitleaks${NC} | ${DIM}go install github.com/gitleaks/gitleaks/v8@latest${NC}"
+fi
+
+exit 0
