@@ -124,7 +124,12 @@ export async function generateToken(options: GenerateTokenOptions): Promise<Gene
     payload.account_id = account_id;
   }
 
-  const token = await sign(payload, JWT_SECRET, 'HS256');
+  // HS512 matches the algorithm declared by SurrealDB's `apikey_token`
+  // ACCESS schema (metabob-activity-api/sql/migrations 000/064/069).
+  // Signing with HS256 produced JWTs that SurrealDB silently rejected
+  // at db.authenticate(token), surfacing as "Authentication required
+  // for destructive operations" 401s on Bearer-auth routes.
+  const token = await sign(payload, JWT_SECRET, 'HS512');
 
   return {
     token,
@@ -141,7 +146,7 @@ export async function generateToken(options: GenerateTokenOptions): Promise<Gene
  */
 export async function verifyToken(token: string): Promise<VerifyTokenResult> {
   try {
-    const payload = await verify(token, JWT_SECRET, 'HS256') as JWTPayload & Partial<MetabobJWTClaims>;
+    const payload = await verify(token, JWT_SECRET, 'HS512') as JWTPayload & Partial<MetabobJWTClaims>;
 
     // Check if token is expired (verify() should handle this, but be explicit)
     const now = Math.floor(Date.now() / 1000);
