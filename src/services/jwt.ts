@@ -13,6 +13,13 @@ import type { JWTPayload } from 'hono/utils/jwt/types';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 const JWT_ISSUER = process.env.JWT_ISSUER || 'https://identity.metabob.com';
+// SurrealDB scope claims — must match the ns/db where the apikey_token
+// ACCESS schema is defined (metabob-activity-api/sql/migrations/000/064/069).
+// Without NS/DB claims, db.authenticate(token) on the consuming side looks
+// at root scope where apikey_token doesn't exist and rejects with
+// "The root access method 'apikey_token' does not exist".
+const JWT_NS = process.env.JWT_NS || 'activity-system';
+const JWT_DB = process.env.JWT_DB || 'learning_loop';
 
 /**
  * Standard JWT claims for Metabob tokens
@@ -39,6 +46,17 @@ export interface MetabobJWTClaims extends JWTPayload {
    * expiration are valid.
    */
   AC?: string;
+
+  /**
+   * SurrealDB namespace claim. Required for db-scoped ACCESS methods —
+   * SurrealDB locates the ACCESS by (NS, DB, AC) tuple.
+   */
+  NS?: string;
+
+  /**
+   * SurrealDB database claim.
+   */
+  DB?: string;
 }
 
 /**
@@ -119,6 +137,8 @@ export async function generateToken(options: GenerateTokenOptions): Promise<Gene
     role,
     project_ids,
     AC: access,
+    NS: JWT_NS,
+    DB: JWT_DB,
   };
   if (account_id) {
     payload.account_id = account_id;
