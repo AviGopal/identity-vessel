@@ -84,39 +84,59 @@ export async function listKeySessions(
     { key_id: keyId, since: opts.since },
   );
 
-  const rows: KeySessionRow[] = (Array.isArray(rowResult) ? rowResult : []).map((r: any) => ({
-    key_id: String(r.key_id),
-    org_id: String(r.org_id),
-    user_id: r.user_id ? String(r.user_id) : undefined,
-    issued_at: typeof r.issued_at === 'string' ? r.issued_at : new Date(r.issued_at).toISOString(),
-    expires_at: typeof r.expires_at === 'string' ? r.expires_at : new Date(r.expires_at).toISOString(),
-    source: r.source as KeySessionSource,
-  }));
+  function safeIso(v: unknown): string {
+    if (typeof v === 'string' && v.length > 0) return v;
+    try { return new Date(v as any).toISOString(); } catch { return new Date(0).toISOString(); }
+  }
 
-  // Aggregate over the *full* history for this key (not just the page).
-  // math::min/max don't accept datetimes, so we work in unix seconds and
-  // re-hydrate ISO strings in JS.
-  const aggResult = await query<any[]>(
-    `SELECT
-       count() AS count,
-       math::sum(time::unix(expires_at) - time::unix(issued_at)) AS total_estimated_seconds,
-       math::min(time::unix(issued_at)) AS first_seen_unix,
-       math::max(time::unix(issued_at)) AS last_seen_unix
-     FROM key_session
-     WHERE key_id = $key_id ${whereSince}
-     GROUP ALL;`,
-    { key_id: keyId, since: opts.since },
-  );
+  const rows: KeySessionRow[] = (Array.isArray(rowResult) ? rowResult : []).flatMap((r: any) => {
+    try {
+      return [{
+        key_id: String(r.key_id),
+        org_id: String(r.org_id),
+        user_id: r.user_id ? String(r.user_id) : undefined,
+        issued_at: safeIso(r.issued_at),
+        expires_at: safeIso(r.expires_at),
+        source: r.source as KeySessionSource,
+      }];
+    } catch { return []; }
+  });
 
-  const aggRow = (Array.isArray(aggResult) ? aggResult[0] : undefined) ?? {};
-  const firstSeenUnix = Number(aggRow.first_seen_unix ?? 0);
-  const lastSeenUnix = Number(aggRow.last_seen_unix ?? 0);
+  // Compute aggregate from the page rows (avoids a second DB query that runs
+  // math::sum/min/max over potentially millions of legacy rows with null dates).
+  // Count comes from a lightweight COUNT-only query so it reflects full history,
+  // not just the current page.
+  let totalCount = rows.length;
+  try {
+    const countResult = await query<any[]>(
+      `SELECT count() AS c FROM key_session WHERE key_id = $key_id ${whereSince} GROUP ALL;`,
+      { key_id: keyId, since: opts.since },
+    );
+    const cr = Array.isArray(countResult) ? countResult[0] : undefined;
+    if (cr?.c != null) totalCount = Number(cr.c);
+  } catch { /* use page length */ }
+
+  let totalEstimatedSeconds = 0;
+  let firstSeen: string | undefined;
+  let lastSeen: string | undefined;
+  for (const row of rows) {
+    try {
+      const issuedMs = new Date(row.issued_at).getTime();
+      const expiresMs = new Date(row.expires_at).getTime();
+      if (!isNaN(issuedMs) && !isNaN(expiresMs)) {
+        totalEstimatedSeconds += Math.max(0, (expiresMs - issuedMs) / 1000);
+      }
+      if (!firstSeen || row.issued_at < firstSeen) firstSeen = row.issued_at;
+      if (!lastSeen || row.issued_at > lastSeen) lastSeen = row.issued_at;
+    } catch { /* skip malformed row */ }
+  }
+
   const aggregate: KeySessionAggregate = {
     key_id: keyId,
-    count: Number(aggRow.count ?? 0),
-    total_estimated_seconds: Number(aggRow.total_estimated_seconds ?? 0),
-    first_seen: firstSeenUnix > 0 ? new Date(firstSeenUnix * 1000).toISOString() : undefined,
-    last_seen: lastSeenUnix > 0 ? new Date(lastSeenUnix * 1000).toISOString() : undefined,
+    count: totalCount,
+    total_estimated_seconds: totalEstimatedSeconds,
+    first_seen: firstSeen,
+    last_seen: lastSeen,
   };
 
   return { rows, aggregate };
