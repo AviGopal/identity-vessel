@@ -1236,10 +1236,13 @@ app.get('/v1/keys/:keyId/sessions', async (c) => {
   }
 
   // Tenant isolation: confirm the requested key belongs to caller's org.
+  // Match by key_id first; fall back to record id suffix for old-format keys.
+  let resolvedKeyId = keyId; // key_id to use for session lookup
   try {
     const { query } = await import('./db/surrealdb');
     const owner = await query<any[]>(
-      `SELECT org_id FROM api_key WHERE key_id = $key_id LIMIT 1;`,
+      `SELECT id, key_id, org_id FROM api_key
+       WHERE key_id = $key_id OR id = type::record('api_key', $key_id) LIMIT 1;`,
       { key_id: keyId },
     );
     const row = Array.isArray(owner) ? owner[0] : undefined;
@@ -1249,6 +1252,9 @@ app.get('/v1/keys/:keyId/sessions', async (c) => {
         403,
       );
     }
+    // For old-format keys with no key_id, sessions are recorded under the
+    // record id suffix (set by resolveAPIKeyLegacy → stableId logic).
+    resolvedKeyId = row.key_id ?? String(row.id ?? '').replace(/^api_key:/, '');
   } catch (err) {
     console.warn('[keys/sessions] org check failed', err instanceof Error ? err.message : err);
     return c.json(
@@ -1262,7 +1268,7 @@ app.get('/v1/keys/:keyId/sessions', async (c) => {
   const limit = limitParam ? parseInt(limitParam, 10) : undefined;
 
   try {
-    const result = await listKeySessions(keyId, { since, limit });
+    const result = await listKeySessions(resolvedKeyId, { since, limit });
     return c.json({ success: true, data: result });
   } catch (err) {
     console.error('[keys/sessions] list failed', err instanceof Error ? err.message : err);
