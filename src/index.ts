@@ -80,6 +80,7 @@ import { loginWithPassword, signupWithPassword } from './resolvers/login';
 import { z } from 'zod';
 import { generateToken, verifyToken, getSecretInfo } from './services/jwt';
 import type { GenerateTokenOptions } from './services/jwt';
+import { recordKeySession, listKeySessions } from './services/keySession';
 import { hashPassword, verifyPassword, validatePassword } from './services/password';
 import { createRateLimitMiddleware } from './middleware/ratelimit';
 
@@ -261,6 +262,19 @@ app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 20), asyn
         });
         data.jwt = jwt.token;
         data.jwt_expires_at = jwt.expires_at;
+
+        // Record a session row for per-key dashboard analytics. Only for
+        // api_key-attributed mints — JWT-derived sessions don't carry a keyId.
+        if (result.type === 'api_key' && result.keyId && result.orgId) {
+          void recordKeySession({
+            key_id: result.keyId,
+            org_id: result.orgId,
+            user_id: result.userId,
+            issued_at: jwt.issued_at,
+            expires_at: jwt.expires_at,
+            source: 'resolve_nested',
+          });
+        }
       } catch (mintErr) {
         console.warn('[auth/resolve] inline JWT mint failed (nested form):',
           mintErr instanceof Error ? mintErr.message : mintErr);
@@ -329,6 +343,17 @@ app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 20), asyn
       });
       jwt = minted.token;
       jwt_expires_at = minted.expires_at;
+
+      if (result.type === 'api_key' && result.keyId && result.orgId) {
+        void recordKeySession({
+          key_id: result.keyId,
+          org_id: result.orgId,
+          user_id: result.userId,
+          issued_at: minted.issued_at,
+          expires_at: minted.expires_at,
+          source: 'resolve_flat',
+        });
+      }
     } catch (mintErr) {
       console.warn('[auth/resolve] inline JWT mint failed (flat form):',
         mintErr instanceof Error ? mintErr.message : mintErr);
@@ -1034,6 +1059,94 @@ app.post('/v1/keys/revoke', async (c) => {
 });
 
 // ============================================================================
+// Key session listing (per-key dashboard analytics)
+// ============================================================================
+
+/**
+ * GET /v1/keys/:keyId/sessions
+ *
+ * Returns recent JWT-mint events attributable to this api_key, plus an
+ * aggregate (count + total estimated active seconds). Used by the cloud
+ * dashboard to show per-key session counts and estimated active time.
+ *
+ * Auth: Bearer JWT required. The caller's `org_id` must match the key's
+ * `org_id` (tenant isolation). Self-scoped — any member of the org can read
+ * sessions for any key in the org. (Tighten to owner-only later if needed.)
+ *
+ * Query params:
+ *   - since: ISO8601 timestamp; restricts both rows and aggregate
+ *   - limit: number (default 100, max 1000)
+ */
+app.get('/v1/keys/:keyId/sessions', async (c) => {
+  const rawKeyId = c.req.param('keyId');
+  if (!rawKeyId) {
+    return c.json({ success: false, error: { code: 'MISSING_KEY_ID', message: 'keyId required' } }, 400);
+  }
+  // SurrealDB record references sometimes arrive with the table prefix
+  // (`api_key:abc123`). The api_key table stores `key_id` bare, so strip.
+  const keyId = rawKeyId.startsWith('api_key:') ? rawKeyId.slice('api_key:'.length) : rawKeyId;
+
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return c.json(
+      { success: false, error: { code: 'MISSING_AUTH', message: 'Bearer JWT required' } },
+      401,
+    );
+  }
+  const token = authHeader.slice('Bearer '.length);
+  const verified = await verifyToken(token);
+  if (!verified.valid || !verified.org_id) {
+    return c.json(
+      { success: false, error: { code: 'INVALID_AUTH', message: verified.error || 'Invalid JWT' } },
+      401,
+    );
+  }
+
+  // Tenant isolation: confirm the requested key belongs to caller's org.
+  try {
+    const { query } = await import('./db/surrealdb');
+    const owner = await query<any[]>(
+      `SELECT org_id FROM api_key WHERE key_id = $key_id LIMIT 1;`,
+      { key_id: keyId },
+    );
+    const row = Array.isArray(owner) ? owner[0] : undefined;
+    if (!row || row.org_id !== verified.org_id) {
+      return c.json(
+        { success: false, error: { code: 'FORBIDDEN', message: 'Key not in caller org' } },
+        403,
+      );
+    }
+  } catch (err) {
+    console.warn('[keys/sessions] org check failed', err instanceof Error ? err.message : err);
+    return c.json(
+      { success: false, error: { code: 'LOOKUP_FAILED', message: 'Could not verify key ownership' } },
+      500,
+    );
+  }
+
+  const since = c.req.query('since') || undefined;
+  const limitParam = c.req.query('limit');
+  const limit = limitParam ? parseInt(limitParam, 10) : undefined;
+
+  try {
+    const result = await listKeySessions(keyId, { since, limit });
+    return c.json({ success: true, data: result });
+  } catch (err) {
+    console.error('[keys/sessions] list failed', err instanceof Error ? err.message : err);
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'LIST_FAILED',
+          message: err instanceof Error ? err.message : 'Unknown error',
+        },
+      },
+      500,
+    );
+  }
+});
+
+// ============================================================================
 // Architecture Notes
 // ============================================================================
 //
@@ -1090,7 +1203,7 @@ const server = {
 if ((process.env.SCHEMA_AUTOAPPLY || 'false').toLowerCase() === 'true') {
   (async () => {
     const { query } = await import('./db/surrealdb');
-    const migrations = ['001-api-keys.surql', '002-users-password-hash.surql'];
+    const migrations = ['001-api-keys.surql', '002-users-password-hash.surql', '003-key-sessions.surql'];
     for (const file of migrations) {
       try {
         const sql = await Bun.file(`${import.meta.dir}/../sql/migrations/${file}`).text();
