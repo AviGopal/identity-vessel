@@ -1059,6 +1059,132 @@ app.post('/v1/keys/revoke', async (c) => {
 });
 
 // ============================================================================
+// Key list / rename / delete — self-service dashboard endpoints
+// ============================================================================
+
+/**
+ * GET /v1/keys
+ * List all API keys for the caller's org. Bearer JWT required.
+ * Returns keys ordered by created_at desc, including revoked ones.
+ */
+app.get('/v1/keys', async (c) => {
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return c.json({ success: false, error: { code: 'MISSING_AUTH', message: 'Bearer JWT required' } }, 401);
+  }
+  const token = authHeader.slice('Bearer '.length);
+  const verified = await verifyToken(token);
+  if (!verified.valid || !verified.org_id) {
+    return c.json({ success: false, error: { code: 'INVALID_AUTH', message: verified.error || 'Invalid JWT' } }, 401);
+  }
+
+  try {
+    const { query } = await import('./db/surrealdb');
+    const rows = await query<any[]>(
+      `SELECT key_id, org_id, user_id, name, prefix, scopes, is_active, created_at, expires_at
+       FROM api_key WHERE org_id = $org_id ORDER BY created_at DESC;`,
+      { org_id: verified.org_id },
+    );
+    const keys = (Array.isArray(rows) ? rows : []).map((r: any) => ({
+      id: r.key_id,
+      key_id: r.key_id,
+      user_id: r.user_id,
+      org_id: r.org_id,
+      name: r.name ?? undefined,
+      prefix: r.prefix ?? r.key_id?.slice(0, 12) ?? '',
+      scopes: r.scopes ?? [],
+      status: r.is_active ? 'active' : 'revoked',
+      created_at: r.created_at,
+      expires_at: r.expires_at ?? undefined,
+    }));
+    return c.json({ success: true, data: { keys } });
+  } catch (err) {
+    console.error('[keys/list]', err instanceof Error ? err.message : err);
+    return c.json({ success: false, error: { code: 'LIST_FAILED', message: 'Could not list keys' } }, 500);
+  }
+});
+
+/**
+ * PUT /v1/keys/:keyId
+ * Rename a key. Bearer JWT required. Caller must own the key (same org).
+ * Body: { name: string }
+ */
+app.put('/v1/keys/:keyId', async (c) => {
+  const keyId = c.req.param('keyId');
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return c.json({ success: false, error: { code: 'MISSING_AUTH', message: 'Bearer JWT required' } }, 401);
+  }
+  const token = authHeader.slice('Bearer '.length);
+  const verified = await verifyToken(token);
+  if (!verified.valid || !verified.org_id) {
+    return c.json({ success: false, error: { code: 'INVALID_AUTH', message: verified.error || 'Invalid JWT' } }, 401);
+  }
+
+  let name: string | undefined;
+  try {
+    const body = await c.req.json();
+    if (typeof body.name === 'string') name = body.name.trim();
+  } catch {
+    return c.json({ success: false, error: { code: 'INVALID_BODY', message: 'JSON body required' } }, 400);
+  }
+  if (!name) {
+    return c.json({ success: false, error: { code: 'INVALID_INPUT', message: 'name must be a non-empty string' } }, 400);
+  }
+
+  try {
+    const { query } = await import('./db/surrealdb');
+    const updated = await query<any[]>(
+      `UPDATE api_key SET name = $name WHERE key_id = $key_id AND org_id = $org_id;`,
+      { name, key_id: keyId, org_id: verified.org_id },
+    );
+    const row = Array.isArray(updated) ? updated[0] : undefined;
+    if (!row) {
+      return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Key not found or not in org' } }, 404);
+    }
+    return c.json({ success: true, data: { key_id: keyId, name } });
+  } catch (err) {
+    console.error('[keys/rename]', err instanceof Error ? err.message : err);
+    return c.json({ success: false, error: { code: 'RENAME_FAILED', message: 'Could not rename key' } }, 500);
+  }
+});
+
+/**
+ * DELETE /v1/keys/:keyId
+ * Revoke a key. Bearer JWT required. Marks is_active=false in DB and sets Redis TTL.
+ */
+app.delete('/v1/keys/:keyId', async (c) => {
+  const keyId = c.req.param('keyId');
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return c.json({ success: false, error: { code: 'MISSING_AUTH', message: 'Bearer JWT required' } }, 401);
+  }
+  const token = authHeader.slice('Bearer '.length);
+  const verified = await verifyToken(token);
+  if (!verified.valid || !verified.org_id) {
+    return c.json({ success: false, error: { code: 'INVALID_AUTH', message: verified.error || 'Invalid JWT' } }, 401);
+  }
+
+  try {
+    const { query } = await import('./db/surrealdb');
+    const updated = await query<any[]>(
+      `UPDATE api_key SET is_active = false WHERE key_id = $key_id AND org_id = $org_id;`,
+      { key_id: keyId, org_id: verified.org_id },
+    );
+    const row = Array.isArray(updated) ? updated[0] : undefined;
+    if (!row) {
+      return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Key not found or not in org' } }, 404);
+    }
+    await revokeKey(keyId);
+    console.log('[keys/delete] revoked key_id:', keyId);
+    return c.json({ success: true, data: { revoked: true, key_id: keyId } });
+  } catch (err) {
+    console.error('[keys/delete]', err instanceof Error ? err.message : err);
+    return c.json({ success: false, error: { code: 'REVOKE_FAILED', message: 'Could not revoke key' } }, 500);
+  }
+});
+
+// ============================================================================
 // Key session listing (per-key dashboard analytics)
 // ============================================================================
 

@@ -177,6 +177,8 @@ export async function issueApiKey(
         org_id = $org_id,
         user_id = $user_id,
         scopes = $scopes,
+        name = $name,
+        prefix = $prefix,
         created_at = time::now(),
         is_active = true${
           generated.expiresAt ? ',\n        expires_at = <datetime>$expires_at' : ''
@@ -187,6 +189,8 @@ export async function issueApiKey(
     org_id: validated.org_id,
     user_id: validated.user_id,
     scopes,
+    name: validated.name ?? null,
+    prefix: generated.key.split('-').slice(0, 2).join('-'),
   };
   if (generated.expiresAt) params.expires_at = generated.expiresAt;
 
