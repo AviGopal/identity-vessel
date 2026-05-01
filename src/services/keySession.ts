@@ -74,10 +74,12 @@ export async function listKeySessions(
 
   const whereSince = opts.since ? 'AND issued_at >= <datetime> $since' : '';
 
-  // Fetch rows, newest first.
+  // Fetch rows, newest first.  WITH INDEX forces use of the composite index on
+  // (key_id, issued_at) even for keys with zero matching rows, avoiding a full
+  // 849K-row scan.
   const rowResult = await query<any[]>(
     `SELECT key_id, org_id, user_id, issued_at, expires_at, source
-     FROM key_session
+     FROM key_session WITH INDEX key_session_by_key_issued
      WHERE key_id = $key_id ${whereSince}
      ORDER BY issued_at DESC
      LIMIT ${limit};`,
@@ -105,16 +107,19 @@ export async function listKeySessions(
   // Compute aggregate from the page rows (avoids a second DB query that runs
   // math::sum/min/max over potentially millions of legacy rows with null dates).
   // Count comes from a lightweight COUNT-only query so it reflects full history,
-  // not just the current page.
+  // not just the current page.  Skip the count entirely for keys with no rows —
+  // avoids a 849K-row scan for keys that have never minted a session.
   let totalCount = rows.length;
-  try {
-    const countResult = await query<any[]>(
-      `SELECT count() AS c FROM key_session WHERE key_id = $key_id ${whereSince} GROUP ALL;`,
-      { key_id: keyId, since: opts.since },
-    );
-    const cr = Array.isArray(countResult) ? countResult[0] : undefined;
-    if (cr?.c != null) totalCount = Number(cr.c);
-  } catch { /* use page length */ }
+  if (rows.length > 0) {
+    try {
+      const countResult = await query<any[]>(
+        `SELECT count() AS c FROM key_session WITH INDEX key_session_by_key_issued WHERE key_id = $key_id ${whereSince} GROUP ALL;`,
+        { key_id: keyId, since: opts.since },
+      );
+      const cr = Array.isArray(countResult) ? countResult[0] : undefined;
+      if (cr?.c != null) totalCount = Number(cr.c);
+    } catch { /* use page length */ }
+  }
 
   let totalEstimatedSeconds = 0;
   let firstSeen: string | undefined;
