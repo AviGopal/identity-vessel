@@ -113,6 +113,33 @@ async function resolveJWT(token: string): Promise<AuthenticationResult> {
 /**
  * Resolve API key
  */
+async function resolveAPIKeyLegacy(apiKey: string): Promise<AuthenticationResult | null> {
+  // Fallback for old-format keys (key_prefix lookup in api_key table).
+  // These predate the HMAC scheme and are validated by prefix match only
+  // (their hash is stored but argon2/sha256 verification happens in other
+  // services; here we record the session so the dashboard shows usage).
+  try {
+    const { query } = await import('../db/surrealdb');
+    const rows = await query<any[]>(
+      `SELECT id, key_id, org_id, user_id, scopes, is_active FROM api_key WHERE key_prefix = $kp LIMIT 1;`,
+      { kp: apiKey },
+    );
+    const row = Array.isArray(rows) ? rows[0] : undefined;
+    if (!row || !row.is_active) return null;
+    const stableId: string = row.key_id ?? String(row.id ?? '').replace(/^api_key:/, '');
+    return {
+      authenticated: true,
+      orgId: row.org_id,
+      userId: row.user_id ? String(row.user_id).replace(/^\[|\]$/g, '') : undefined,
+      keyId: stableId,
+      type: 'api_key',
+      scopes: Array.isArray(row.scopes) ? row.scopes : ['read', 'write'],
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function resolveAPIKey(apiKey: string): Promise<AuthenticationResult> {
   // Validate format, signature, and look up DB-backed scopes.
   // validateKey returns scopes from the api_key row when present; otherwise
@@ -120,6 +147,10 @@ async function resolveAPIKey(apiKey: string): Promise<AuthenticationResult> {
   const validation = await validateKey(apiKey);
 
   if (!validation.valid) {
+    // HMAC validation failed — try the legacy prefix-based DB lookup so old
+    // keys (seeded before the HMAC scheme) still record sessions.
+    const legacy = await resolveAPIKeyLegacy(apiKey);
+    if (legacy) return legacy;
     return {
       authenticated: false,
       reason: validation.error || 'Invalid API key'

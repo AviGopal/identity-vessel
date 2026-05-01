@@ -1081,22 +1081,29 @@ app.get('/v1/keys', async (c) => {
   try {
     const { query } = await import('./db/surrealdb');
     const rows = await query<any[]>(
-      `SELECT key_id, org_id, user_id, name, prefix, scopes, is_active, created_at, expires_at
+      `SELECT id, key_id, key_prefix, org_id, user_id, name, prefix, scopes, is_active, created_at, expires_at
        FROM api_key WHERE org_id = $org_id ORDER BY created_at DESC;`,
       { org_id: verified.org_id },
     );
-    const keys = (Array.isArray(rows) ? rows : []).map((r: any) => ({
-      id: r.key_id,
-      key_id: r.key_id,
-      user_id: r.user_id,
-      org_id: r.org_id,
-      name: r.name ?? undefined,
-      prefix: r.prefix ?? r.key_id?.slice(0, 12) ?? '',
-      scopes: r.scopes ?? [],
-      status: r.is_active ? 'active' : 'revoked',
-      created_at: r.created_at,
-      expires_at: r.expires_at ?? undefined,
-    }));
+    const keys = (Array.isArray(rows) ? rows : []).map((r: any) => {
+      // Old-format keys have no key_id; use the SurrealDB record id suffix as
+      // the stable lookup key so the sessions endpoint can match them.
+      const stableId: string = r.key_id ?? String(r.id ?? '').replace(/^api_key:/, '');
+      return {
+        id: stableId,
+        key_id: stableId,
+        user_id: r.user_id,
+        org_id: r.org_id,
+        name: r.name ?? undefined,
+        // key_prefix is the display prefix for old-format keys; new HMAC keys
+        // may store it as prefix. Fall back to first 20 chars of key_prefix.
+        prefix: r.prefix ?? (r.key_prefix ? String(r.key_prefix).slice(0, 20) : stableId.slice(0, 12)),
+        scopes: r.scopes ?? [],
+        status: r.is_active ? 'active' : 'revoked',
+        created_at: r.created_at,
+        expires_at: r.expires_at ?? undefined,
+      };
+    });
     return c.json({ success: true, data: { keys } });
   } catch (err) {
     console.error('[keys/list]', err instanceof Error ? err.message : err);
