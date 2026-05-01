@@ -47,11 +47,51 @@ export async function getSurrealDB(): Promise<Surreal> {
 }
 
 /**
- * Execute a query with error handling
+ * Detect auth-state-lost errors that mean our cached connection has lost
+ * its signin context (e.g. SurrealDB pod restarted while we held the
+ * client). The driver auto-reconnects but does not re-signin, so every
+ * subsequent query lands as anonymous and trips PERMISSIONS clauses.
+ */
+function isAuthStateLostError(err: unknown): boolean {
+  if (!err) return false;
+  const msg = err instanceof Error ? err.message : String(err);
+  // Cover both the message and the structured `kind:"Auth"` field that the
+  // SurrealDB driver embeds in its error string.
+  return /Anonymous access not allowed|Not enough permissions|kind:\s*['"]?Auth['"]?/i.test(msg);
+}
+
+/**
+ * Force-discard the cached connection so the next getSurrealDB() builds a
+ * fresh one (which re-runs connect → use → signin).
+ */
+async function resetSurrealDB(): Promise<void> {
+  const stale = db;
+  db = null;
+  if (stale) {
+    try {
+      await stale.close();
+    } catch {
+      // ignore — we're throwing this connection away anyway
+    }
+  }
+}
+
+/**
+ * Execute a query with error handling. If the cached connection has lost
+ * its auth state (typically because SurrealDB restarted underneath us),
+ * reset the singleton and retry once with a fresh connect+signin.
  */
 export async function query<T = any>(
   sql: string,
-  params?: Record<string, any>
+  params?: Record<string, any>,
+): Promise<T> {
+  return queryInternal<T>(sql, params, false);
+}
+
+async function queryInternal<T = any>(
+  sql: string,
+  params: Record<string, any> | undefined,
+  isRetry: boolean,
 ): Promise<T> {
   const connection = await getSurrealDB();
 
@@ -66,6 +106,11 @@ export async function query<T = any>(
 
     return result as T;
   } catch (error) {
+    if (!isRetry && isAuthStateLostError(error)) {
+      console.warn('[SurrealDB] auth state lost — resetting connection and retrying once');
+      await resetSurrealDB();
+      return queryInternal<T>(sql, params, true);
+    }
     console.error('[SurrealDB] Query error:', error);
     console.error('[SurrealDB] Query:', sql);
     console.error('[SurrealDB] Params:', params);
