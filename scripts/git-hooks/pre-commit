@@ -54,6 +54,7 @@ ROOT_ALLOWLIST=(
   vitest.config.ts
   Dockerfile
   biome.json
+  shape-dispatch.config.json
 )
 
 ALLOWED_TOPLEVEL_DIRS=(
