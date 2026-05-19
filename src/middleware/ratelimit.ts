@@ -39,15 +39,55 @@ function extractIp(c: Context): string {
 }
 
 /**
+ * Build the per-request bucket key, defaulting to IP-only.  Callers may
+ * substitute a function that incorporates additional dimensions (e.g. the
+ * API-key prefix) so that distinct callers behind a shared NAT IP don't
+ * share a single bucket.
+ *
+ * Audit 2026-05-16: /v1/auth/resolve was IP-only at 20 req/min, which
+ * caused 5-concurrent-request bursts from a single key to wedge entire
+ * activity-api pods (multiple authentic callers behind a cluster egress IP
+ * shared one bucket). Per-key bucketing fixes that without losing IP-level
+ * abuse protection.
+ */
+export type BucketKeyFn = (c: Context, ip: string) => string;
+
+/**
+ * Default bucket key: IP only. Pre-existing rate-limited routes keep this.
+ */
+function defaultBucketKey(_c: Context, ip: string): string {
+  return ip;
+}
+
+/**
+ * Bucket key that combines IP with the first 8 chars of an API key (when
+ * present in the Authorization header). When no key is present (e.g. Bearer
+ * JWT, or impulse-form body), falls back to IP-only so the bucket still
+ * exists. Used on /v1/auth/resolve per audit findings 2026-05-16.
+ */
+export function bucketKeyIpAndApiKeyPrefix(c: Context, ip: string): string {
+  const authHeader = c.req.header('Authorization') || '';
+  if (authHeader.startsWith('ApiKey ')) {
+    const prefix = authHeader.slice('ApiKey '.length, 'ApiKey '.length + 8);
+    if (prefix.length > 0) {
+      return `${ip}:${prefix}`;
+    }
+  }
+  return ip;
+}
+
+/**
  * Factory that returns a Hono middleware enforcing `limitPerMinute` requests
- * per unique client IP within a sliding 60-second window.
+ * per bucket within a sliding 60-second window.
  *
  * @param endpoint     Short identifier used as part of the Redis key, e.g. "keys_validate"
- * @param limitPerMinute  Maximum allowed requests per minute per IP
+ * @param limitPerMinute  Maximum allowed requests per minute per bucket
+ * @param bucketKeyFn  Optional custom bucket-key function (default: IP only)
  */
 export function createRateLimitMiddleware(
   endpoint: string,
   limitPerMinute: number,
+  bucketKeyFn: BucketKeyFn = defaultBucketKey,
 ) {
   return async (c: Context, next: Next): Promise<Response | void> => {
     const ip = extractIp(c);
@@ -57,7 +97,8 @@ export function createRateLimitMiddleware(
       return next();
     }
 
-    const key = getRateLimitKey(endpoint, ip);
+    const bucket = bucketKeyFn(c, ip);
+    const key = getRateLimitKey(endpoint, bucket);
     const { allowed, retryAfterSeconds } = await checkRateLimit(key, limitPerMinute);
 
     if (!allowed) {

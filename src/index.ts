@@ -82,7 +82,7 @@ import { generateToken, verifyToken, getSecretInfo } from './services/jwt';
 import type { GenerateTokenOptions } from './services/jwt';
 import { recordKeySession, listKeySessions } from './services/keySession';
 import { hashPassword, verifyPassword, validatePassword } from './services/password';
-import { createRateLimitMiddleware } from './middleware/ratelimit';
+import { createRateLimitMiddleware, bucketKeyIpAndApiKeyPrefix } from './middleware/ratelimit';
 
 const app = new Hono();
 
@@ -219,7 +219,12 @@ const resolveSchema = z.object({
  * no memberships, `account_id` is omitted and downstream services derive it
  * from `org_id`.
  */
-app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 20), async (c) => {
+// Audit 2026-05-16: was (auth_resolve, 20) keyed by IP-only — 5-concurrent
+// bursts over 15s would trip 20 req/min/IP, cascading 429 → activity-api
+// {authenticated:false} → client 401. Raised to 100 req/min and keyed by
+// `${ip}:${apiKeyPrefix8}` so distinct callers behind a shared NAT IP get
+// distinct buckets; bursts from a single key still get 5× the prior headroom.
+app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 100, bucketKeyIpAndApiKeyPrefix), async (c) => {
   try {
     // Read body defensively — flat-form callers may send `{}` or no body.
     let body: any = {};

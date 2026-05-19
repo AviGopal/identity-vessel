@@ -49,6 +49,7 @@ import { resolveAuthentication, setUserVesselClient } from './auth';
 import { generateApiKey } from '../services/keyGeneration';
 import {
   UserVesselClient,
+  _resetUserAccountsCache,
   type AccountMembership,
 } from '../services/user-vessel-client';
 
@@ -69,9 +70,14 @@ function makeClient(
 describe('auth-resolve account_id enrichment', () => {
   beforeEach(() => {
     setUserVesselClient(null);
+    // Audit 2026-05-16: queryUserAccounts now has a module-level TTL cache.
+    // Reset between tests so a cached result from a prior test doesn't bleed
+    // into the next (all tests share `users:alice`).
+    _resetUserAccountsCache();
   });
   afterEach(() => {
     setUserVesselClient(null);
+    _resetUserAccountsCache();
   });
 
   // Each test waits up to 30s because the Redis revocation check (which we
