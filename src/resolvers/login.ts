@@ -353,7 +353,7 @@ export async function signupWithPassword(body: unknown): Promise<AuthResult> {
       `CREATE users SET
         email = $email, name = $name,
         password_hash = $password_hash,
-        org_id = type::thing($org_id);`,
+        org_id = type::record($org_id);`,
       { email: validated.email, name: displayName, password_hash: passwordHash, org_id: orgRef },
     );
     const created = extractRows<any>(userResult)[0];
@@ -369,16 +369,16 @@ export async function signupWithPassword(body: unknown): Promise<AuthResult> {
       { id: orgRef, name: orgName },
     );
     await query(
-      `CREATE organization_members SET org_id = type::thing($org_id), user_id = type::thing($user_id), role = 'owner';`,
+      `CREATE organization_members SET org_id = type::record($org_id), user_id = type::record($user_id), role = 'owner';`,
       { org_id: orgRef, user_id: userRef },
     );
     // Mirror the org as an account (matches user-vessel migration 002).
     await query(
-      `CREATE type::record($id) SET name = $name, tier = 'free', seat_limit = 1, created_by = type::thing($user_id);`,
+      `CREATE type::record($id) SET name = $name, tier = 'free', seat_limit = 1, created_by = type::record($user_id);`,
       { id: acctRef, name: orgName, user_id: userRef },
     );
     await query(
-      `CREATE account_members SET account_id = type::thing($account_id), user_id = type::thing($user_id), role = 'owner';`,
+      `CREATE account_members SET account_id = type::record($account_id), user_id = type::record($user_id), role = 'owner';`,
       { account_id: acctRef, user_id: userRef },
     );
   } catch (err) {
