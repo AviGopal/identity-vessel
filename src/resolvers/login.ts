@@ -365,8 +365,11 @@ export async function signupWithPassword(body: unknown): Promise<AuthResult> {
 
   try {
     await query(
-      `CREATE type::record($id) SET name = $name, tier = 'free';`,
-      { id: orgRef, name: orgName },
+      // org_id field has VALUE $before OR $value OR id; the `id` fallback
+      // is a record reference and fails the TYPE string coerce. Pass
+      // org_id explicitly as the canonical string form.
+      `CREATE type::record($id) SET name = $name, subscription_tier = 'free', org_id = $org_id_str;`,
+      { id: orgRef, name: orgName, org_id_str: orgRef },
     );
     await query(
       `CREATE organization_members SET org_id = <string>$org_id, user_id = <string>$user_id, role = 'owner';`,
