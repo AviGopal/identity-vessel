@@ -171,16 +171,20 @@ export async function issueApiKey(
   // The api_key.expires_at schema field is `none | datetime` — passing NULL
   // fails coercion. Omit the SET clause entirely when no expiration is set so
   // the field defaults to NONE.
+  // Same pattern as expires_at above: when name is absent, omit the SET clause
+  // entirely so the schema's `name TYPE option<string>` field defaults to NONE.
+  // Passing JS `null` fails the option<string> coerce in SurrealDB 3.x.
   const sql = `CREATE api_key SET
         key_id = $key_id,
         key_hash = $key_hash,
         org_id = $org_id,
         user_id = $user_id,
         scopes = $scopes,
-        name = $name,
         prefix = $prefix,
         created_at = time::now(),
         is_active = true${
+          validated.name ? ',\n        name = $name' : ''
+        }${
           generated.expiresAt ? ',\n        expires_at = <datetime>$expires_at' : ''
         };`;
   const params: Record<string, unknown> = {
@@ -189,9 +193,9 @@ export async function issueApiKey(
     org_id: validated.org_id,
     user_id: validated.user_id,
     scopes,
-    name: validated.name ?? null,
     prefix: generated.key.split('-').slice(0, 2).join('-'),
   };
+  if (validated.name) params.name = validated.name;
   if (generated.expiresAt) params.expires_at = generated.expiresAt;
 
   try {
