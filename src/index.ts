@@ -370,6 +370,7 @@ app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 100, buck
       org_id: result.orgId,
       account_id: result.accountId,
       role: 'member',
+      key_id: result.type === 'api_key' ? result.keyId : undefined,
       jwt,
       jwt_expires_at,
     });
