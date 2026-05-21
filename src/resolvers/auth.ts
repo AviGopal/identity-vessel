@@ -89,7 +89,10 @@ async function enrichWithAccountId(
  */
 async function resolveJWT(token: string): Promise<AuthenticationResult> {
   try {
-    const payload = await verify(token, JWT_SECRET, "HS256") as any;
+    // HS512 to match the signer in services/jwt.ts:152 (which is HS512 to
+    // satisfy SurrealDB's apikey_token access). HS256 here silently
+    // rejected every JWT issued by /v1/jwt/generate or login.
+    const payload = await verify(token, JWT_SECRET, "HS512") as any;
 
     // generateToken() emits snake_case claims (org_id, user_id, account_id)
     // per the canonical JWT shape; legacy callers may have used camelCase, so

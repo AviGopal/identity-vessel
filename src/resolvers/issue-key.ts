@@ -92,7 +92,7 @@ async function authorizeAdmin(
     const token = authHeader.slice('Bearer '.length);
     let payload: any;
     try {
-      payload = await verifyJwt(token, JWT_SECRET, 'HS256');
+      payload = await verifyJwt(token, JWT_SECRET, 'HS512');
     } catch (err) {
       return fail(401, 'INVALID_JWT', err instanceof Error ? err.message : 'JWT verification failed');
     }

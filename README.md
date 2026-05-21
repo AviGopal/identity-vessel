@@ -171,6 +171,29 @@ The following endpoints have been moved to `user-vessel`:
 
 See [user-vessel](../user-vessel/README.md) for user and API key management.
 
+## Discovery Registration
+
+Identity-vessel registers with discovery-vessel on startup and advertises a single shape:
+
+| Shape | Pointer types | Description |
+|-------|---------------|-------------|
+| `authentication` | `apiKey`, `session` | Validates credentials and returns auth context |
+
+**Shape vs pointer-type distinction (explicit design decision):**
+The shape is `authentication` (what the impulse *is*), while the pointer type (`apiKey` or `session`) selects which credential form to validate. This is recorded in `shape-dispatch.config.json` at the vessel root:
+
+```json
+{
+  "shape_to_pointer_types": {
+    "authentication": ["apiKey", "session", "jwtToken"]
+  }
+}
+```
+
+`jwtToken` is a legacy alias for `session` — callers should use `session` for new integrations. Both are dispatched to the same resolver.
+
+Resolving via discovery-vessel means other vessels should query `POST /resolve?shape=authentication` and call the returned `resolve_endpoint` (`/v1/auth/resolve`) rather than hardcoding the identity-vessel URL.
+
 ## Integration Patterns
 
 ### As HTTP Middleware

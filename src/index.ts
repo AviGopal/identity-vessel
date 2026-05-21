@@ -2,7 +2,7 @@
  * Identity Vessel - Single source of truth for authentication operations
  *
  * This vessel is the authoritative service for:
- * - JWT token generation and validation (Hono JWT, HS256)
+ * - JWT token generation and validation (Hono JWT, HS512)
  * - Password hashing and verification (Argon2id via Bun)
  * - API key generation (HMAC-based)
  * - API key validation (format + signature + revocation check)
@@ -170,7 +170,7 @@ app.get('/capabilities', (c) => {
     ],
     notes: [
       'identity-vessel is the SINGLE SOURCE OF TRUTH for ALL authentication operations',
-      'JWT: Uses hono/jwt with HS256 algorithm',
+      'JWT: Uses hono/jwt with HS512 algorithm',
       'Password: Uses Argon2id via Bun.password (memory-hard, side-channel resistant)',
       'API Keys: HMAC-based generation with Redis-backed revocation',
       'user-vessel handles org/member/api-key DATA, delegates auth to identity-vessel'

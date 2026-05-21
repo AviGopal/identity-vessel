@@ -91,7 +91,7 @@ describe('issueApiKey — admin-only key issuance', () => {
         exp: Math.floor(Date.now() / 1000) + 3600,
       },
       JWT_SECRET,
-      'HS256',
+      'HS512',
     );
     setQueryFn(async () => []);
 
