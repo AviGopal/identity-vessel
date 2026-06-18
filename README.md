@@ -1,6 +1,7 @@
 # Identity Vessel
 
-Pure authentication validation service. Validates JWT tokens and API keys, but does not manage user accounts or issue keys.
+Pure authentication validation service. 
+Validates JWT tokens and API keys, but does not manage user accounts or issue keys.
 
 ## Architecture
 
