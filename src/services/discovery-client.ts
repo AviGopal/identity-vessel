@@ -7,7 +7,7 @@
  * - Graceful degradation: Operates independently if discovery is unavailable
  */
 
-import { VesselClient, type DiscoveryConfig } from '@metabob/vessel-discovery-client';
+import { VesselClient, type DiscoveryConfig } from '@avigopal/vessel-discovery-client';
 import { config } from './config';
 
 /**
