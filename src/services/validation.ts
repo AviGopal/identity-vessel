@@ -19,6 +19,32 @@ import type { ApiKeyComponents, ValidationResult } from '../types';
 // Environment configuration
 const SECRET_KEY = process.env.API_KEY_SECRET || 'dev-secret-change-in-production';
 
+// C6: issuer-aware validation. A key carries its own issuer endpoint in its
+// signed payload (ApiKeyComponents.iss). A spoke cannot recompute the HMAC of a
+// hub-issued key (different API_KEY_SECRET), so it validates such a key by
+// delegating to the key's OWN issuer instead of requiring a shared secret.
+const SELF_ISSUER = process.env.IDENTITY_ENDPOINT || 'https://identity.metabob.com';
+
+function normalizeIssuer(url: string | undefined): string {
+  return (url || '').replace(/\/+$/, '').toLowerCase();
+}
+
+// Delegation trusts whatever the key claims as `iss`, so it is gated on an
+// allowlist. TODO(trusted-issuers): TRUSTED_ISSUERS is the follow-up knob; it
+// defaults to [self, HUB_DISCOVERY_URL] so a spoke trusts only its own issuer
+// and its hub, never an arbitrary attacker-chosen endpoint.
+const TRUSTED_ISSUERS: string[] = (
+  process.env.TRUSTED_ISSUERS
+    ? process.env.TRUSTED_ISSUERS.split(',')
+    : [SELF_ISSUER, process.env.HUB_DISCOVERY_URL || '']
+).map((s) => normalizeIssuer(s)).filter(Boolean);
+
+function isSelfIssuer(iss: string | undefined): boolean {
+  const n = normalizeIssuer(iss);
+  // Empty issuer (legacy keys) is treated as locally issued.
+  return n === '' || n === normalizeIssuer(SELF_ISSUER);
+}
+
 // Lazy-imported query function so that validation.ts has no hard dependency
 // on SurrealDB at module-load time (keeps the synchronous fast-path test-clean).
 type QueryFn = (sql: string, params?: Record<string, any>) => Promise<any>;
@@ -237,7 +263,59 @@ export async function lookupKeyScopes(keyId: string): Promise<string[] | null> {
  * synchronous fast-path for callers that only need format/signature checks
  * (e.g. revocation, which only needs the keyId).
  */
+/**
+ * C6: delegate validation of a foreign-issued key to its own issuer.
+ *
+ * A spoke cannot recompute the HMAC of a hub-issued key (its API_KEY_SECRET
+ * differs), so it POSTs the key to the issuer's canonical /v1/keys/validate and
+ * trusts that verdict. Mirrors the raw-fetch egress used by services/trace.ts;
+ * `iss` is the key's self-described issuer endpoint carried in the key itself,
+ * not a discovery capability row, so a direct fetch is the intended path (there
+ * is no libp2p egress in identity-vessel to route through).
+ */
+async function delegateValidation(apiKey: string, iss: string): Promise<ValidationResult> {
+  if (!TRUSTED_ISSUERS.includes(normalizeIssuer(iss))) {
+    return { valid: false, error: `Untrusted key issuer: ${iss}` };
+  }
+  try {
+    const response = await fetch(`${iss.replace(/\/+$/, '')}/v1/keys/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey }),
+    });
+    if (!response.ok) {
+      return { valid: false, error: `Issuer validation failed (${response.status})` };
+    }
+    const parsed: any = await response.json();
+    // /v1/keys/validate wraps its verdict as { success, data: {...} }.
+    const data = parsed?.data ?? parsed;
+    if (!data || data.valid !== true) {
+      return { valid: false, error: data?.error || 'Issuer rejected key' };
+    }
+    return {
+      valid: true,
+      orgId: data.org_id,
+      userId: data.user_id,
+      keyId: data.key_id,
+      scopes: Array.isArray(data.scopes) ? data.scopes : undefined,
+    };
+  } catch (error) {
+    return {
+      valid: false,
+      error: `Issuer unreachable: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
 export async function validateKey(apiKey: string): Promise<ValidationResult> {
+  // C6: read the issuer claim WITHOUT trusting the local secret. A key issued by
+  // another substrate cannot be HMAC-verified here, so route it to its own
+  // issuer for validation; only iss===self falls back to local-secret HMAC.
+  const components = parseApiKey(apiKey);
+  if (components && !isSelfIssuer(components.iss)) {
+    return delegateValidation(apiKey, components.iss);
+  }
+
   const result = validateKeyFormat(apiKey);
 
   if (!result.valid || !result.keyId) {

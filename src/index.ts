@@ -84,6 +84,20 @@ import { recordKeySession, listKeySessions } from './services/keySession';
 import { hashPassword, verifyPassword, validatePassword } from './services/password';
 import { createRateLimitMiddleware, bucketKeyIpAndApiKeyPrefix } from './middleware/ratelimit';
 
+// C6/security: refuse to boot with the well-known dev secret in a real
+// deployment. An unset API_KEY_SECRET falls back to this literal in the key
+// services, so treat unset the same as the insecure default. Opt back in for
+// local development with ALLOW_INSECURE_API_KEY_SECRET=1.
+const INSECURE_DEFAULT_API_KEY_SECRET = 'dev-secret-change-in-production';
+if (!process.env.API_KEY_SECRET || process.env.API_KEY_SECRET === INSECURE_DEFAULT_API_KEY_SECRET) {
+  if (process.env.ALLOW_INSECURE_API_KEY_SECRET === '1') {
+    console.warn('[SECURITY] API_KEY_SECRET is unset or the insecure default; ALLOW_INSECURE_API_KEY_SECRET=1 is set, continuing (DEV ONLY).');
+  } else {
+    console.error('[SECURITY] API_KEY_SECRET is unset or the insecure default "dev-secret-change-in-production". Refusing to boot. Set a strong API_KEY_SECRET, or ALLOW_INSECURE_API_KEY_SECRET=1 for local dev.');
+    process.exit(1);
+  }
+}
+
 const app = new Hono();
 
 // Middleware
