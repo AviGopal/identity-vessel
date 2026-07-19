@@ -52,10 +52,15 @@ const TRUSTED_ISSUERS: string[] = (
     : [SELF_ISSUER, process.env.HUB_DISCOVERY_URL || '']
 ).map((s) => normalizeIssuer(s)).filter(Boolean);
 
+// The keyGeneration DEFAULT issuer (keyGeneration.ts falls back to this exact string
+// when IDENTITY_ENDPOINT is unset at mint time) means "locally issued by the default
+// identity" — treat it as self, like an empty/legacy issuer, so a substrate validates
+// its OWN default-configured keys LOCALLY instead of delegating them to the public
+// metabob endpoint (which caused a 401 on discovery registration).
+const DEFAULT_ISSUER = 'https://identity.metabob.com';
 function isSelfIssuer(iss: string | undefined): boolean {
   const n = normalizeIssuer(iss);
-  // Empty issuer (legacy keys) is treated as locally issued.
-  return n === '' || n === normalizeIssuer(SELF_ISSUER);
+  return n === '' || n === normalizeIssuer(SELF_ISSUER) || n === normalizeIssuer(DEFAULT_ISSUER);
 }
 
 // Lazy-imported query function so that validation.ts has no hard dependency
