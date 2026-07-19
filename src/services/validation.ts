@@ -333,23 +333,25 @@ async function delegateValidation(apiKey: string, iss: string): Promise<Validati
 }
 
 export async function validateKey(apiKey: string): Promise<ValidationResult> {
-  // C6: read the issuer claim WITHOUT trusting the local secret. A key issued by
-  // another substrate cannot be HMAC-verified here, so route it to its own
-  // issuer for validation; only iss===self falls back to local-secret HMAC.
+  // LOCAL-FIRST validation (C6): a key the local secret(s) can HMAC-verify is OURS
+  // (or a shared-secret, in-identity-group peer) regardless of how its `iss` is
+  // labelled — validate it locally. Only a key we CANNOT verify locally is treated
+  // as foreign: if its `iss` is a trusted remote issuer, delegate to that issuer;
+  // otherwise it is invalid. This ordering is robust to iss/host-form/env-load
+  // mismatches (an earlier iss-gated version mis-routed our OWN keys to delegation,
+  // which failed as "Untrusted issuer" -> 401 on registration) while still
+  // supporting cross-substrate keys via issuer delegation.
+  const result = validateKeyFormat(apiKey);
+
+  if (result.valid && result.keyId) {
+    const scopes = await lookupKeyScopes(result.keyId);
+    return scopes !== null ? { ...result, scopes } : result;
+  }
+
+  // Local verification failed — maybe a foreign key signed by a trusted issuer.
   const components = parseApiKey(apiKey);
   if (components && !isSelfIssuer(components.iss)) {
     return delegateValidation(apiKey, components.iss);
-  }
-
-  const result = validateKeyFormat(apiKey);
-
-  if (!result.valid || !result.keyId) {
-    return result;
-  }
-
-  const scopes = await lookupKeyScopes(result.keyId);
-  if (scopes !== null) {
-    return { ...result, scopes };
   }
 
   return result;
