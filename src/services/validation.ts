@@ -16,8 +16,21 @@
 import { createHmac, timingSafeEqual } from 'crypto';
 import type { ApiKeyComponents, ValidationResult } from '../types';
 
-// Environment configuration
-const SECRET_KEY = process.env.API_KEY_SECRET || 'dev-secret-change-in-production';
+// Dual-secret (rotation-window) validation. New keys are always SIGNED with the
+// CURRENT API_KEY_SECRET (see keyGeneration.ts), but a presented key is ACCEPTED
+// if it verifies under the current secret OR any previous secret. Set
+// API_KEY_SECRET_PREVIOUS (comma-separated retired secrets) during a rotation
+// window: current=new, previous=old keeps old-signed keys valid until every key
+// is re-issued, then drop previous. Built ONCE at module load; [current, ...previous],
+// deduped, empties filtered. Local-HMAC path only — C6 delegation never uses these.
+const SECRET_KEYS: string[] = (() => {
+  const current = process.env.API_KEY_SECRET || 'dev-secret-change-in-production';
+  const previous = (process.env.API_KEY_SECRET_PREVIOUS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return Array.from(new Set([current, ...previous]));
+})();
 
 // C6: issuer-aware validation. A key carries its own issuer endpoint in its
 // signed payload (ApiKeyComponents.iss). A spoke cannot recompute the HMAC of a
@@ -130,27 +143,34 @@ export function parseApiKey(apiKey: string): ApiKeyComponents | null {
 /**
  * Verify HMAC signature using constant-time comparison
  */
-export function verifySignature(components: ApiKeyComponents): boolean {
+export function verifySignature(
+  components: ApiKeyComponents,
+  secrets: string[] = SECRET_KEYS
+): boolean {
   const { encodedPayload, signature: providedSignature } = components;
 
   // Reconstruct what was signed: mb-[base64-payload]
   const finalPayload = `mb-${encodedPayload}`;
 
-  // Calculate expected signature
-  const expectedSignature = createHmac('sha256', SECRET_KEY)
-    .update(finalPayload)
-    .digest('hex')
-    .slice(0, 32); // Truncate to 32 chars for reasonable key length
-
-  // Constant-time comparison to prevent timing attacks
+  // Constant-time comparison; accept if ANY configured secret reproduces the sig.
   const providedBuffer = Buffer.from(providedSignature);
-  const expectedBuffer = Buffer.from(expectedSignature);
 
-  if (providedBuffer.length !== expectedBuffer.length) {
-    return false;
+  for (const secret of secrets) {
+    const expectedSignature = createHmac('sha256', secret)
+      .update(finalPayload)
+      .digest('hex')
+      .slice(0, 32); // Truncate to 32 chars for reasonable key length
+
+    const expectedBuffer = Buffer.from(expectedSignature);
+    if (providedBuffer.length !== expectedBuffer.length) {
+      continue;
+    }
+    if (timingSafeEqual(providedBuffer, expectedBuffer)) {
+      return true;
+    }
   }
 
-  return timingSafeEqual(providedBuffer, expectedBuffer);
+  return false;
 }
 
 /**
