@@ -39,3 +39,6 @@ DEFINE INDEX OVERWRITE key_session_by_key_issued ON key_session
 
 DEFINE INDEX OVERWRITE key_session_by_org_issued ON key_session
   FIELDS org_id, issued_at;
+
+DEFINE INDEX OVERWRITE idx_ks_expires ON key_session
+  FIELDS expires_at;

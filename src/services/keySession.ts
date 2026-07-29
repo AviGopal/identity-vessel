@@ -28,6 +28,17 @@ export interface KeySessionAggregate {
   last_seen?: string;
 }
 
+// Amortized reap tuning. SurrealDB (RocksDB) has no native record TTL, so
+// expired key_session rows accumulate unboundedly and have previously grown to
+// millions, thrashing the host. Rather than a static timer (law 5 prefers no
+// timers), we fold a *bounded* sweep of provably-expired rows into the
+// fire-and-forget write path: roughly one in REAP_EVERY healthy writes triggers
+// a reap of up to REAP_BATCH rows. Any backlog drains over successive auth calls.
+const REAP_EVERY = 50;
+const REAP_BATCH = 500;
+let writeCounter = 0;
+let reaping = false; // in-flight latch: skip redundant overlapping reaps
+
 /**
  * Record a session row. Best-effort: any error is swallowed and logged.
  */
@@ -51,11 +62,49 @@ export async function recordKeySession(row: KeySessionRow): Promise<void> {
         source: row.source,
       },
     );
+
+    // A successful CREATE proves the connection is healthy; ride it to amortize
+    // an expired-row reap. Fully fire-and-forget so it never blocks or fails the
+    // auth hot path.
+    if (++writeCounter % REAP_EVERY === 0) {
+      void reapExpiredKeySessions();
+    }
   } catch (err) {
     console.warn('[keySession] record failed', {
       key_id: row.key_id,
       err: err instanceof Error ? err.message : String(err),
     });
+  }
+}
+
+/**
+ * Bounded reap of provably-expired key_session rows. Deletes ONLY rows whose
+ * expires_at is already past — the sole auth-safe predicate. No auth decision
+ * reads key_session (JWT validity is self-contained in the token; api-key
+ * validation uses HMAC + Redis revocation), so removing expired rows cannot
+ * affect any active session or in-flight auth. expires_at is schema-required
+ * (ASSERT != NONE) so the comparison never mishandles nulls. Bounded two-step
+ * (SELECT ids LIMIT N, then point-DELETE the array) rides idx_ks_expires and
+ * keeps the transaction small — no full-table lock. Best-effort; errors swallowed.
+ */
+export async function reapExpiredKeySessions(limit: number = REAP_BATCH): Promise<void> {
+  if (reaping) return;
+  reaping = true;
+  const n = Math.max(1, Math.floor(limit));
+  try {
+    const { query } = await import('../db/surrealdb');
+    await query(
+      `LET $ids = SELECT VALUE id FROM key_session
+         WHERE expires_at < time::now()
+         LIMIT ${n};
+       DELETE $ids RETURN NONE;`,
+    );
+  } catch (err) {
+    console.warn('[keySession] reap failed', {
+      err: err instanceof Error ? err.message : String(err),
+    });
+  } finally {
+    reaping = false;
   }
 }
 
