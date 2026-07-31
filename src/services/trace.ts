@@ -55,6 +55,7 @@ export async function sendAuthenticationTrace(trace: AuthenticationTrace): Promi
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'X-Internal-Api-Key': process.env.INTERNAL_API_KEY ?? process.env.METABOB_API_KEY ?? 'identity-vessel',
       },
       body: JSON.stringify({
         template_id: 'auth_resolve_v1',
