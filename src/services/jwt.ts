@@ -14,7 +14,7 @@ import type { JWTPayload } from 'hono/utils/jwt/types';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 const JWT_ISSUER = process.env.JWT_ISSUER || 'https://identity.metabob.com';
 // SurrealDB scope claims — must match the ns/db where the apikey_token
-// ACCESS schema is defined (metabob-activity-api/sql/migrations/000/064/069).
+// ACCESS schema is defined (activity-api/sql/migrations/000/064/069).
 // Without NS/DB claims, db.authenticate(token) on the consuming side looks
 // at root scope where apikey_token doesn't exist and rejects with
 // "The root access method 'apikey_token' does not exist".
@@ -145,7 +145,7 @@ export async function generateToken(options: GenerateTokenOptions): Promise<Gene
   }
 
   // HS512 matches the algorithm declared by SurrealDB's `apikey_token`
-  // ACCESS schema (metabob-activity-api/sql/migrations 000/064/069).
+  // ACCESS schema (activity-api/sql/migrations 000/064/069).
   // Signing with HS256 produced JWTs that SurrealDB silently rejected
   // at db.authenticate(token), surfacing as "Authentication required
   // for destructive operations" 401s on Bearer-auth routes.

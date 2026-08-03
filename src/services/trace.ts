@@ -1,9 +1,9 @@
 /**
  * Trace collection for authentication operations
- * Sends execution metrics to metabob-activity-api for learning
+ * Sends execution metrics to activity-api for learning
  */
 
-const ACTIVITY_API_ENDPOINT = process.env.ACTIVITY_API_ENDPOINT || 'http://metabob-activity-api.activity-system.svc.cluster.local:8080';
+const ACTIVITY_API_ENDPOINT = process.env.ACTIVITY_API_ENDPOINT || 'http://activity-api.activity-system.svc.cluster.local:8080';
 
 // Sampling configuration - only send a percentage of traces
 const TRACE_SAMPLE_RATE = parseFloat(process.env.TRACE_SAMPLE_RATE || '0.01'); // 1% by default
