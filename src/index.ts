@@ -421,8 +421,72 @@ const generateJWTSchema = z.object({
  */
 app.post('/v1/jwt/generate', async (c) => {
   try {
+    // The mint authenticates the CALLER and binds the minted claims to that
+    // caller's own identity. It deliberately does NOT require `admin` scope:
+    // the operator key that drives in-container key issuance carries only
+    // read/write, and requiring admin here would break issuance fleet-wide.
+    // What it does forbid is minting a token for somebody else -- org_id and
+    // user_id must be the caller's own, so a key cannot cross a tenant
+    // boundary simply by asking for one.
+    const authHeader = c.req.header('Authorization');
+    let callerOrgId: string | undefined;
+    let callerUserId: string | undefined;
+
+    if (!authHeader) {
+      return c.json({
+        success: false,
+        error: { code: 'MISSING_AUTH_HEADER', message: 'Missing Authorization header' },
+      }, 401);
+    }
+
+    if (authHeader.startsWith('ApiKey ')) {
+      const validation = await validateKey(authHeader.slice('ApiKey '.length));
+      if (!validation.valid) {
+        return c.json({
+          success: false,
+          error: { code: 'INVALID_API_KEY', message: validation.error || 'Invalid API key' },
+        }, 401);
+      }
+      if (validation.keyId && (await isKeyRevoked(validation.keyId))) {
+        return c.json({
+          success: false,
+          error: { code: 'REVOKED_API_KEY', message: 'API key has been revoked' },
+        }, 401);
+      }
+      callerOrgId = validation.orgId;
+      callerUserId = validation.userId;
+    } else if (authHeader.startsWith('Bearer ')) {
+      const verified = await verifyToken(authHeader.slice('Bearer '.length));
+      if (!verified.valid) {
+        return c.json({
+          success: false,
+          error: { code: 'INVALID_JWT', message: verified.error || 'JWT verification failed' },
+        }, 401);
+      }
+      callerOrgId = verified.org_id;
+      callerUserId = verified.user_id;
+    } else {
+      return c.json({
+        success: false,
+        error: {
+          code: 'INVALID_AUTH_SCHEME',
+          message: 'Authorization must start with "ApiKey " or "Bearer "',
+        },
+      }, 401);
+    }
+
     const body = await c.req.json();
     const options = generateJWTSchema.parse(body);
+
+    if (options.org_id !== callerOrgId || options.user_id !== callerUserId) {
+      return c.json({
+        success: false,
+        error: {
+          code: 'FORBIDDEN',
+          message: 'Token claims must match the authenticated credential',
+        },
+      }, 403);
+    }
 
     const result = await generateToken(options);
 
