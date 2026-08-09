@@ -68,6 +68,27 @@ export async function sendAuthenticationTrace(trace: AuthenticationTrace): Promi
         org_id: trace.orgId || 'unknown',
         user_id: trace.userId || 'unknown',
         error_message: trace.error,
+        // GRADE IT, BECAUSE AN UNGRADED TRACE IS NOT NEUTRAL (2026-08-09).
+        //
+        // These traces carried no tags at all, so every one reached the ribosome as
+        // `ungraded / no-reach-tag` — the auth_* family was one of the two largest
+        // ungraded groups in a 3h census. An ungraded execution is one the ribosome
+        // must skip ("not honestly reached"), so the family sat permanently in a
+        // state that reads as "we could not tell" when the truth is "there is
+        // nothing to tell".
+        //
+        // reached:false is the correct value and NOT a placeholder. An authentication
+        // is telemetry, not a goal walk: it has no target shapes and no reach verdict,
+        // and ribosome-vessel treats reached:true as EXTRACT FROM THIS. Minting an
+        // activity template out of a credential check would be nonsense. Tagging it
+        // false says "graded, and deliberately not an extraction donor" rather than
+        // leaving the consumer to guess.
+        tags: [
+          'identity-vessel',
+          'reached:false',
+          'telemetry:auth',
+          trace.success ? 'auth:success' : 'auth:failure',
+        ],
         metadata: {
           activity_type: trace.activityType,
           key_id: trace.keyId,
