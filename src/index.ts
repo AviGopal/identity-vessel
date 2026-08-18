@@ -1324,9 +1324,17 @@ app.get('/v1/keys/:keyId/sessions', async (c) => {
   let resolvedKeyId = keyId; // key_id to use for session lookup
   try {
     const { query } = await import('./db/surrealdb');
+    // `type::record('api_key', $key_id)` was wrong here. On the deployed
+    // SurrealDB 2.3.3 `type::record` is the record *cast* —
+    // `type::record($value, $table?)` — so those two arguments read as "cast
+    // the string 'api_key' into a record<key_…>", which throws and turned
+    // every request into a 500. Same lesson as services/validation.ts:252 and
+    // resolvers/issue-key.ts:166: avoid the record-constructor helper
+    // entirely. `record::id(id)` yields the bare record-id suffix, which is
+    // exactly what the old-format-key fallback wanted.
     const owner = await query<any[]>(
       `SELECT id, key_id, org_id FROM api_key
-       WHERE key_id = $key_id OR id = type::record('api_key', $key_id) LIMIT 1;`,
+       WHERE key_id = $key_id OR record::id(id) = $key_id LIMIT 1;`,
       { key_id: keyId },
     );
     const row = Array.isArray(owner) ? owner[0] : undefined;
