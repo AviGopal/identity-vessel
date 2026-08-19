@@ -21,6 +21,8 @@
  *   in user-vessel/activity-api fall back to deriving from `org_id`.
  */
 
+import { redactCredential } from './redact';
+
 const DEFAULT_TIMEOUT_MS = 1000;
 
 /**
@@ -160,8 +162,10 @@ export class UserVesselClient {
       };
 
       if (!body.ok || !body.result) {
+        // We forwarded the caller's Authorization header to user-vessel; its
+        // error string is untrusted text that may echo that credential back.
         console.warn('[UserVesselClient] user-vessel returned ok=false', {
-          error: body.error,
+          error: body.error ? redactCredential(body.error, authHeader) : undefined,
         });
         return cacheAndReturn(null);
       }
@@ -170,7 +174,10 @@ export class UserVesselClient {
       return cacheAndReturn(accounts);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'unknown error';
-      console.warn('[UserVesselClient] user-vessel unreachable', { url, err: message });
+      console.warn('[UserVesselClient] user-vessel unreachable', {
+        url,
+        err: redactCredential(message, authHeader),
+      });
       return cacheAndReturn(null);
     } finally {
       clearTimeout(timer);

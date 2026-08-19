@@ -10,6 +10,7 @@
 
 import { sign, verify } from 'hono/jwt';
 import type { JWTPayload } from 'hono/utils/jwt/types';
+import { safeJwtErrorMessage } from './redact';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 const JWT_ISSUER = process.env.JWT_ISSUER || 'https://identity.metabob.com';
@@ -188,9 +189,17 @@ export async function verifyToken(token: string): Promise<VerifyTokenResult> {
       iat: payload.iat,
     };
   } catch (error) {
+    // NEVER surface `error.message` here. hono's JWT errors interpolate the
+    // presented token into the message (`invalid JWT token: <token>`,
+    // `token(<token>) signature mismatched`, …), and this `error` field is
+    // returned verbatim in 401 bodies by /v1/keys, /v1/jwt/generate,
+    // /v1/jwt/verify and friends — which echoed the caller's credential back
+    // to anyone who mis-set their Authorization scheme. safeJwtErrorMessage()
+    // maps the error CLASS to a fixed diagnostic string and fails closed on
+    // classes it does not know.  See services/redact.ts.
     return {
       valid: false,
-      error: error instanceof Error ? error.message : 'Token verification failed',
+      error: safeJwtErrorMessage(error),
     };
   }
 }

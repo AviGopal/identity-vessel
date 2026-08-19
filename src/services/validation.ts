@@ -15,6 +15,7 @@
 
 import { createHmac, timingSafeEqual } from 'crypto';
 import type { ApiKeyComponents, ValidationResult } from '../types';
+import { redactCredential } from './redact';
 
 // Dual-secret (rotation-window) validation. New keys are always SIGNED with the
 // CURRENT API_KEY_SECRET (see keyGeneration.ts), but a presented key is ACCEPTED
@@ -315,7 +316,14 @@ async function delegateValidation(apiKey: string, iss: string): Promise<Validati
     // /v1/keys/validate wraps its verdict as { success, data: {...} }.
     const data = parsed?.data ?? parsed;
     if (!data || data.valid !== true) {
-      return { valid: false, error: data?.error || 'Issuer rejected key' };
+      // We POSTed the caller's key to the issuer. If that issuer echoes the
+      // key back in its own error string, forwarding it verbatim would leak
+      // the credential through OUR response body. Scrub before surfacing.
+      const upstream = typeof data?.error === 'string' ? data.error : '';
+      return {
+        valid: false,
+        error: upstream ? redactCredential(upstream, apiKey) : 'Issuer rejected key',
+      };
     }
     return {
       valid: true,
@@ -327,7 +335,11 @@ async function delegateValidation(apiKey: string, iss: string): Promise<Validati
   } catch (error) {
     return {
       valid: false,
-      error: `Issuer unreachable: ${error instanceof Error ? error.message : String(error)}`,
+      // fetch/DNS errors can quote the request; scrub the key out regardless.
+      error: redactCredential(
+        `Issuer unreachable: ${error instanceof Error ? error.message : String(error)}`,
+        apiKey,
+      ),
     };
   }
 }
