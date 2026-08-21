@@ -118,3 +118,41 @@ describe('verifyToken', () => {
     expect(result.org_id).toBe('o1');
   });
 });
+
+/**
+ * The second vector, found by probing the FIXED source rather than reading the
+ * diff: `resolvers/issue-key.ts` imports hono's `verify` directly instead of
+ * going through `services/jwt.ts`'s verifyToken(), so it never inherited the
+ * mapping above and kept returning `err.message` verbatim.
+ *
+ *   POST /v1/keys/issue -H 'authorization: Bearer mb-FAKE-CANARY-…'
+ *   -> {"error":{"code":"INVALID_JWT",
+ *       "message":"invalid JWT token: mb-FAKE-CANARY-abcdef0123456789"}}
+ *
+ * This test asserts the property that actually matters — that every direct
+ * hono/jwt caller is routed through safeJwtErrorMessage() — rather than
+ * re-testing the helper, which the cases above already cover.
+ */
+describe('direct hono/jwt call sites', () => {
+  it('routes every raw `verify` import through safeJwtErrorMessage', async () => {
+    const src = await Bun.file(
+      new URL('../resolvers/issue-key.ts', import.meta.url).pathname,
+    ).text();
+
+    // The catch block around the direct verifyJwt() call must not surface
+    // `err.message`; it must hand the error to the redaction helper.
+    expect(src).toContain('safeJwtErrorMessage(err)');
+    expect(src).not.toMatch(
+      /INVALID_JWT',\s*err instanceof Error \? err\.message/,
+    );
+  });
+
+  it('gives the canary probe a credential-free message', () => {
+    const err = new Error(`invalid JWT token: ${CANARY}`);
+    err.name = 'JwtTokenInvalid';
+    const message = safeJwtErrorMessage(err);
+    expect(message).not.toContain(CANARY);
+    expect(message).not.toContain('mb-');
+    expect(message).toBe('JWT is malformed');
+  });
+});

@@ -14,6 +14,7 @@ import { generateApiKey } from '../services/keyGeneration';
 import { validateKey } from '../services/validation';
 import { isKeyRevoked } from '../db/redis';
 import { verify as verifyJwt } from 'hono/jwt';
+import { safeJwtErrorMessage } from '../services/redact';
 import { createHash } from 'crypto';
 
 type QueryFn = (sql: string, params?: Record<string, any>) => Promise<any>;
@@ -94,7 +95,12 @@ async function authorizeAdmin(
     try {
       payload = await verifyJwt(token, JWT_SECRET, 'HS512');
     } catch (err) {
-      return fail(401, 'INVALID_JWT', err instanceof Error ? err.message : 'JWT verification failed');
+      // NEVER surface `err.message` here. This calls hono's `verify` DIRECTLY
+      // rather than through services/jwt.ts's verifyToken(), so it does not
+      // inherit the mapping added there — and hono interpolates the presented
+      // token into its exception message, which this `message` returns
+      // verbatim in the 401 body. See services/redact.ts.
+      return fail(401, 'INVALID_JWT', safeJwtErrorMessage(err));
     }
     const role = (payload?.role as string | undefined) ?? '';
     if (role !== 'admin' && role !== 'owner') return fail(403, 'FORBIDDEN', 'JWT role is not admin');

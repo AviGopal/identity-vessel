@@ -2,7 +2,7 @@
 
 Three defects found against a live 0.2.0 deployment (the `dashboard-film` namespace) while
 filming an unrelated demonstration. Each was reproduced with real requests; every probe below
-used a **fabricated canary**, never a live credential. All three are still open.
+used a **fabricated canary**, never a live credential. Finding 2 is now fixed; findings 1 and 3 are still open.
 
 The credential-echo defect these were found alongside is fixed in `2caa4fbb`; these are not.
 
@@ -37,10 +37,10 @@ revoked, saw `active` in the listing, and flagged it rather than accepting the c
 
 ---
 
-## 2. `POST /v1/keys/issue` still echoes the presented credential, after `2caa4fbb`
+## 2. `POST /v1/keys/issue` still echoes the presented credential, after `2caa4fbb` — FIXED
 
-`2caa4fbb` fixed the echo at the `verifyJWT` chokepoint in `src/services/jwt.ts`. It does not
-cover `src/resolvers/issue-key.ts:96`, which returns `err.message` from `verifyJwt` verbatim on
+`2caa4fbb` fixed the echo at the `verifyJWT` chokepoint in `src/services/jwt.ts`. It did not
+cover `src/resolvers/issue-key.ts:96`, which returned `err.message` from `verifyJwt` verbatim on
 its own path.
 
 ```
@@ -49,8 +49,21 @@ POST /v1/keys/issue   -H "authorization: Bearer mb-FAKE-CANARY-abcdef0123456789"
 ```
 
 Same class as the fixed defect, same blast radius: credentials in error strings reach logs,
-transcripts and screen recordings. It needs the same treatment — map the failure class to a fixed
-string rather than passing an exception message through.
+transcripts and screen recordings.
+
+**Root cause.** `issue-key.ts` does `import { verify as verifyJwt } from 'hono/jwt'` — a DIRECT
+import. `2caa4fbb` fixed `verifyToken()` in `services/jwt.ts`, so anything routed through that
+wrapper is safe, but a direct caller never inherits it. That is why probing the fixed source
+found this and reading the diff did not.
+
+**Fixed** by routing the catch through `safeJwtErrorMessage(err)`, the same helper `2caa4fbb`
+introduced. A regression test asserts the property rather than the helper — that no direct
+`hono/jwt` call site surfaces `err.message` — and was confirmed to FAIL against the unfixed line
+before being committed.
+
+`src/resolvers/auth.ts` also imports `verify` directly but was already safe: it discards the
+error and returns a fixed `'Invalid or expired JWT token'`. Those three are the only
+`hono/jwt` importers in `src/`.
 
 ---
 
