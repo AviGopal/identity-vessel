@@ -1118,6 +1118,32 @@ app.post('/v1/keys/revoke', async (c) => {
     // Revoke in Redis (1 year TTL)
     await revokeKey(keyIdToRevoke);
 
+    // AND MARK THE DURABLE ROW. revokeKey() only writes Redis
+    // (`revoked:<keyId>`, db/redis.ts), which is what the validate path reads —
+    // so validation correctly refused a revoked key while GET /v1/keys, which
+    // reads SurrealDB and derives status from is_active, went on reporting it
+    // `active` forever. Measured: substrate-key list showed `active`
+    // immediately after a successful revoke and again ten seconds later, so an
+    // operator following the documented revoke-then-list sequence concluded the
+    // revoke had failed.
+    //
+    // Redis stays the fast path the validate route checks; this makes the
+    // durable row agree with it. Failure to update is logged, not thrown: the
+    // key IS revoked at the enforcement layer by this point, and turning a
+    // successful revocation into an error response would be the worse lie.
+    try {
+      const { query: sdbQuery } = await import('./db/surrealdb');
+      await sdbQuery(
+        `UPDATE api_key SET is_active = false WHERE key_id = $key_id;`,
+        { key_id: keyIdToRevoke },
+      );
+    } catch (sdbErr) {
+      console.error('[KeyRevocation] Redis revocation succeeded but the api_key row was not updated:', {
+        key_id: keyIdToRevoke,
+        error: sdbErr instanceof Error ? sdbErr.message : sdbErr,
+      });
+    }
+
     console.log('[KeyRevocation] Key revoked:', {
       key_id: keyIdToRevoke,
     });
