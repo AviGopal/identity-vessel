@@ -93,7 +93,16 @@ export function createRateLimitMiddleware(
     const ip = extractIp(c);
 
     // Allowlisted IPs bypass rate limiting entirely.
-    if (ALLOWLIST_IPS.has(ip)) {
+    // SECURITY: the `'unknown'` placeholder (returned by extractIp when no
+    // X-Forwarded-For is present) must NEVER be allowlist-eligible. It is not a
+    // real IP — extractIp's own contract is that it "still participates in rate
+    // limiting" so header-less callers all share a bucket rather than being
+    // skipped. A deployment that lists `unknown` in RATE_LIMIT_ALLOWLIST_IPS
+    // (as this fleet did) would otherwise let any caller that simply omits the
+    // header bypass every limiter — including the expensive password/hash and
+    // auth/resolve routes. Excluding the placeholder here restores that contract
+    // regardless of env misconfiguration.
+    if (ip !== 'unknown' && ALLOWLIST_IPS.has(ip)) {
       return next();
     }
 

@@ -71,7 +71,7 @@ function fail(status: number, code: FailureCode, message: string): IssueKeyFailu
   return { ok: false, status, code, message };
 }
 
-async function authorizeAdmin(
+export async function authorizeAdmin(
   authHeader: string | undefined,
 ): Promise<{ ok: true } | IssueKeyFailure> {
   if (!authHeader) return fail(401, 'MISSING_AUTH_HEADER', 'Missing Authorization header');

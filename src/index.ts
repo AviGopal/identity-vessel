@@ -75,7 +75,7 @@ import { generateApiKey, generateKeyMetadata } from './services/keyGeneration';
 import { validateKeyFormat, validateKey, parseApiKey } from './services/validation';
 import { revokeKey, isKeyRevoked } from './db/redis';
 import { config } from './services/config';
-import { issueApiKey } from './resolvers/issue-key';
+import { issueApiKey, authorizeAdmin } from './resolvers/issue-key';
 import { loginWithPassword, signupWithPassword } from './resolvers/login';
 import { z } from 'zod';
 import { generateToken, verifyToken, getSecretInfo } from './services/jwt';
@@ -583,8 +583,12 @@ const hashPasswordSchema = z.object({
  * Request:  { password }
  * Response: { hash }
  */
-app.post('/v1/auth/password/hash', async (c) => {
+app.post('/v1/auth/password/hash', createRateLimitMiddleware('password_hash', 5), async (c) => {
   try {
+    // SECURITY: Argon2id hashing is deliberately expensive (~150-220ms CPU).
+    // Left unlimited and unauthenticated this is a remote CPU-exhaustion oracle.
+    // Rate-limit it like its sibling /v1/auth/password/verify (5/min per bucket);
+    // legitimate signup traffic arrives through the ingress with a real client IP.
     const body = await c.req.json();
     const { password } = hashPasswordSchema.parse(body);
 
@@ -859,6 +863,16 @@ const generateKeySchema = z.object({
  */
 app.post('/v1/keys/generate', async (c) => {
   try {
+    // SECURITY: /v1/keys/generate mints an HMAC-signed key that validateKey()
+    // accepts fleet-wide with no api_key row required (resolveAPIKey needs only
+    // HMAC validity). Left unauthenticated it is an anonymous credential factory
+    // for any attacker-chosen org_id. Gate it exactly like /v1/keys/issue —
+    // admin scope (ApiKey) or admin/owner role (Bearer JWT). No vessel calls this
+    // endpoint over HTTP (bootstrap uses in-process generateApiKey); verified.
+    const authz = await authorizeAdmin(c.req.header('Authorization'));
+    if ('status' in authz) {
+      return c.json({ success: false, error: { code: authz.code, message: authz.message } }, authz.status as any);
+    }
     const body = await c.req.json();
     const { org_id, user_id, name, scopes, expires_in_days } = generateKeySchema.parse(body);
 
@@ -1084,6 +1098,14 @@ const revokeKeySchema = z.object({
  */
 app.post('/v1/keys/revoke', async (c) => {
   try {
+    // SECURITY: revocation is a destructive fleet-wide action (revoke the
+    // substrate admin key and you deny the whole fleet). Left unauthenticated
+    // any caller could revoke any key_id unconditionally. Gate it admin-only —
+    // the operator surface (substrate-key revoke) already presents an admin JWT.
+    const authz = await authorizeAdmin(c.req.header('Authorization'));
+    if ('status' in authz) {
+      return c.json({ success: false, error: { code: authz.code, message: authz.message } }, authz.status as any);
+    }
     const body = await c.req.json();
     const { key_id, api_key } = revokeKeySchema.parse(body);
 
