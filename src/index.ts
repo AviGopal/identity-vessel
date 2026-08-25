@@ -431,6 +431,7 @@ app.post('/v1/jwt/generate', async (c) => {
     const authHeader = c.req.header('Authorization');
     let callerOrgId: string | undefined;
     let callerUserId: string | undefined;
+    let callerIsAdmin = false;
 
     if (!authHeader) {
       return c.json({
@@ -455,6 +456,7 @@ app.post('/v1/jwt/generate', async (c) => {
       }
       callerOrgId = validation.orgId;
       callerUserId = validation.userId;
+      callerIsAdmin = (validation.scopes || []).includes('admin');
     } else if (authHeader.startsWith('Bearer ')) {
       const verified = await verifyToken(authHeader.slice('Bearer '.length));
       if (!verified.valid) {
@@ -465,6 +467,7 @@ app.post('/v1/jwt/generate', async (c) => {
       }
       callerOrgId = verified.org_id;
       callerUserId = verified.user_id;
+      callerIsAdmin = verified.role === 'admin' || verified.role === 'owner';
     } else {
       return c.json({
         success: false,
@@ -484,6 +487,24 @@ app.post('/v1/jwt/generate', async (c) => {
         error: {
           code: 'FORBIDDEN',
           message: 'Token claims must match the authenticated credential',
+        },
+      }, 403);
+    }
+
+    // SECURITY: gate the requested ROLE by caller entitlement. The mint already
+    // binds org_id/user_id to the caller, but without this a read/write key could
+    // mint itself an admin-role JWT, which then passes the role check in
+    // authorizeAdmin's Bearer branch (used by /v1/keys/generate|revoke|issue).
+    // Minting an admin/owner-role token therefore requires the caller to already
+    // hold admin (ApiKey admin scope, or an admin/owner-role Bearer). member and
+    // viewer roles remain open to any authenticated caller. The operator surface
+    // (substrate-key mint_jwt) presents SUBSTRATE_ADMIN_KEY for admin roles.
+    if ((options.role === 'admin' || options.role === 'owner') && !callerIsAdmin) {
+      return c.json({
+        success: false,
+        error: {
+          code: 'FORBIDDEN',
+          message: `Minting a '${options.role}'-role token requires admin entitlement`,
         },
       }, 403);
     }
