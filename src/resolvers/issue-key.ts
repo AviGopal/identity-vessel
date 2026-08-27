@@ -156,6 +156,22 @@ export async function issueApiKey(
   const authz = await authorizeAdmin(authHeader);
   if ('status' in authz) return authz;
 
+  return mintApiKey(body);
+}
+
+/**
+ * Mint + persist a key, WITHOUT any authorization check.
+ *
+ * Split out of issueApiKey() so a caller that has established authority by some
+ * other means can reuse the exact minting path rather than reimplementing it.
+ * The only such caller is the loopback admin-bootstrap resolver, which proves
+ * in-container root by presenting API_KEY_SECRET; see bootstrap-admin.ts for why
+ * that path has to exist at all.
+ *
+ * Anything reachable from the network MUST go through issueApiKey() instead.
+ * This function grants an arbitrary scope set, including 'admin', to any caller.
+ */
+export async function mintApiKey(body: unknown): Promise<IssueKeyResult> {
   const validated = validateInput(body);
   if ('status' in validated) return validated;
 

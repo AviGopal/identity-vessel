@@ -76,6 +76,7 @@ import { validateKeyFormat, validateKey, parseApiKey } from './services/validati
 import { revokeKey, isKeyRevoked } from './db/redis';
 import { config } from './services/config';
 import { issueApiKey, authorizeAdmin } from './resolvers/issue-key';
+import { bootstrapAdminKey } from './resolvers/bootstrap-admin';
 import { loginWithPassword, signupWithPassword } from './resolvers/login';
 import { z } from 'zod';
 import { generateToken, verifyToken, getSecretInfo } from './services/jwt';
@@ -1008,6 +1009,20 @@ app.post('/v1/keys/issue', async (c) => {
       expires_at: result.expires_at,
     },
   });
+});
+
+/**
+ * POST /v1/keys/bootstrap-admin
+ * Recover key management on a substrate that holds no admin plaintext.
+ *
+ * Loopback-only, and requires proof of API_KEY_SECRET. Deliberately NOT covered
+ * by authorizeAdmin: it exists precisely for the state where no admin credential
+ * can be produced. All gating lives in the resolver — see bootstrap-admin.ts for
+ * why this is not a privilege escalation.
+ */
+app.post('/v1/keys/bootstrap-admin', async (c) => {
+  const result = await bootstrapAdminKey(c);
+  return c.json(result.body, result.status as any);
 });
 
 // ============================================================================
