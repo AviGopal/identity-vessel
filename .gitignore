@@ -1,36 +1,4 @@
-# Dependencies
-node_modules
+*.js
+*.js.map
+*.d.ts
 
-# Bun
-.bun
-bun.lockb
-
-# Environment variables
-.env
-.env.local
-.env.production
-
-# Logs
-*.log
-logs
-
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode
-.idea
-*.swp
-*.swo
-*~
-
-# Build output
-dist
-build
-test/
-
-# Bootstrap key metadata — contains keyId for the admin bootstrap key.
-# The actual API key is never stored here, but the keyId is sensitive enough
-# that this file must not be committed. Store contents in env vars / K8s secrets.
-.bootstrap-key.json
