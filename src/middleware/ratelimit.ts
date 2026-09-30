@@ -12,6 +12,7 @@
  */
 
 import type { Context, Next } from 'hono';
+import { getConnInfo } from 'hono/bun';
 import { checkRateLimit, getRateLimitKey } from '../db/redis';
 
 // Parse allowlist once at module load time for O(1) lookups.
@@ -22,20 +23,62 @@ const ALLOWLIST_IPS: Set<string> = new Set(
     .filter(Boolean),
 );
 
+/** IPv4-mapped and IPv6 loopback read as 127.0.0.1, so one allowlist entry covers every loopback form. */
+export function normalizePeer(addr: string | undefined): string | undefined {
+  if (!addr) return undefined;
+  const a = addr.trim();
+  if (a === '::1') return '127.0.0.1';
+  return a.startsWith('::ffff:') ? a.slice('::ffff:'.length) : a;
+}
+
+/** First hop of x-forwarded-for, or undefined when the header is absent or empty. */
+function forwardedFirst(forwardedFor: string | undefined): string | undefined {
+  const first = (forwardedFor ?? '').split(',')[0]?.trim();
+  return first ? first : undefined;
+}
+
 /**
- * Extract the caller IP from standard proxy headers or fall back to a
- * placeholder that still participates in rate limiting (so callers without
- * a forwarded-for header all share a single bucket rather than being skipped).
+ * The ALLOWLIST is decided on the SOCKET PEER of a DIRECT caller, never on a header (2026-09-30).
+ *
+ * The old extractIp read only x-forwarded-for and returned 'unknown' otherwise, and 'unknown' is correctly never
+ * allowlist-eligible, so RATE_LIMIT_ALLOWLIST_IPS=127.0.0.1 could never match: every in-container vessel (no
+ * forwarding header) shared ONE 'unknown' bucket, and a 64-unit hub rate-limited itself (~415 auth_resolve 429s
+ * per minute on syzygy.host). Deciding on the header instead would let any caller claim 127.0.0.1.
+ *
+ * So a request is allowlisted only when it carries NO x-forwarded-for (a proxied request, even one arriving from a
+ * loopback relay, stays limited in its forwarded client's bucket) and its socket peer is known and listed.
  */
-function extractIp(c: Context): string {
-  const forwarded = c.req.header('x-forwarded-for');
-  if (forwarded) {
-    // x-forwarded-for may contain a comma-separated chain; first entry is the
-    // original client IP.
-    const first = forwarded.split(',')[0].trim();
-    if (first) return first;
+export function isAllowlisted(peer: string | undefined, forwardedFor: string | undefined, allowlist: Set<string>): boolean {
+  if (forwardedFirst(forwardedFor) !== undefined) return false;
+  const p = normalizePeer(peer);
+  return p !== undefined && p !== 'unknown' && allowlist.has(p);
+}
+
+/** A peer whose x-forwarded-for may be believed: loopback only (an in-container proxy). identity is published on
+ *  0.0.0.0, so any other caller can put anything in the header. */
+function isTrustedProxy(peer: string | undefined): boolean {
+  return normalizePeer(peer) === '127.0.0.1';
+}
+
+/**
+ * The bucket IP: the socket peer; the forwarded client only when the peer is a trusted (loopback) proxy; else the
+ * 'unknown' placeholder, which still participates in rate limiting. Believing x-forwarded-for from ANY caller let a
+ * direct external caller send a new header per request and land in a fresh bucket every time: unlimited
+ * auth_resolve / API-key validation (qa, 2026-09-30; pre-existing, fixable once the peer is known).
+ */
+export function bucketIp(peer: string | undefined, forwardedFor: string | undefined): string {
+  const fwd = forwardedFirst(forwardedFor);
+  if (fwd !== undefined && isTrustedProxy(peer)) return fwd;
+  return normalizePeer(peer) ?? 'unknown';
+}
+
+/** The socket peer, or undefined when it cannot be determined (never guessed: an unnamed origin is not local). */
+function socketPeer(c: Context): string | undefined {
+  try {
+    return getConnInfo(c).remote.address;
+  } catch {
+    return undefined;
   }
-  return 'unknown';
 }
 
 /**
@@ -90,21 +133,16 @@ export function createRateLimitMiddleware(
   bucketKeyFn: BucketKeyFn = defaultBucketKey,
 ) {
   return async (c: Context, next: Next): Promise<Response | void> => {
-    const ip = extractIp(c);
+    const peer = socketPeer(c);
+    const forwardedFor = c.req.header('x-forwarded-for');
 
-    // Allowlisted IPs bypass rate limiting entirely.
-    // SECURITY: the `'unknown'` placeholder (returned by extractIp when no
-    // X-Forwarded-For is present) must NEVER be allowlist-eligible. It is not a
-    // real IP — extractIp's own contract is that it "still participates in rate
-    // limiting" so header-less callers all share a bucket rather than being
-    // skipped. A deployment that lists `unknown` in RATE_LIMIT_ALLOWLIST_IPS
-    // (as this fleet did) would otherwise let any caller that simply omits the
-    // header bypass every limiter — including the expensive password/hash and
-    // auth/resolve routes. Excluding the placeholder here restores that contract
-    // regardless of env misconfiguration.
-    if (ip !== 'unknown' && ALLOWLIST_IPS.has(ip)) {
+    // Allowlisted DIRECT callers bypass rate limiting entirely (see isAllowlisted).
+    // SECURITY: the 'unknown' placeholder and an undeterminable peer are NEVER allowlist-eligible, even when a
+    // deployment lists 'unknown' in RATE_LIMIT_ALLOWLIST_IPS (as this fleet did); a header is never trusted for it.
+    if (isAllowlisted(peer, forwardedFor, ALLOWLIST_IPS)) {
       return next();
     }
+    const ip = bucketIp(peer, forwardedFor);
 
     const bucket = bucketKeyFn(c, ip);
     const key = getRateLimitKey(endpoint, bucket);
