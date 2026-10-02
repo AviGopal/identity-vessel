@@ -106,6 +106,20 @@ export interface VerifyTokenResult {
   exp?: number;
   iat?: number;
   error?: string;
+  /** Set when the token is a federation on-behalf-of token (see services/obo.ts). */
+  obo?: { node: string; shape: string; actor_key_id?: string; caller_key_id?: string };
+}
+
+export interface VerifyTokenOptions {
+  /**
+   * Accept a federation on-behalf-of token. Off by default: every privileged route
+   * (JWT mint, key management) calls verifyToken() without it, so an OBO token can
+   * never be turned into a general session or used to manage keys. Only plain
+   * verification of who the caller is turns it on.
+   */
+  allowObo?: boolean;
+  /** When set, an OBO token must have been minted for exactly this node and shape. */
+  audience?: { node: string; shape: string } | null;
 }
 
 /**
@@ -165,9 +179,29 @@ export async function generateToken(options: GenerateTokenOptions): Promise<Gene
  * @param token - JWT token string
  * @returns Verification result with claims if valid
  */
-export async function verifyToken(token: string): Promise<VerifyTokenResult> {
+export async function verifyToken(token: string, opts: VerifyTokenOptions = {}): Promise<VerifyTokenResult> {
   try {
     const payload = await verify(token, JWT_SECRET, 'HS512') as JWTPayload & Partial<MetabobJWTClaims>;
+
+    if ((payload as any).typ === 'obo') {
+      if (!opts.allowObo) {
+        return { valid: false, error: 'An on-behalf-of token is not accepted here' };
+      }
+      const p = payload as any;
+      if (opts.audience && !(p.aud === `substrate:${opts.audience.node}` && p.obo_shape === opts.audience.shape)) {
+        return { valid: false, error: 'On-behalf-of token was minted for a different node or shape' };
+      }
+      return {
+        valid: true,
+        user_id: p.user_id || p.sub,
+        org_id: p.org_id,
+        role: p.role,
+        project_ids: [],
+        exp: p.exp,
+        iat: p.iat,
+        obo: { node: String(p.aud ?? '').replace(/^substrate:/, ''), shape: String(p.obo_shape ?? ''), actor_key_id: p.act?.key_id, caller_key_id: p.caller_key_id },
+      };
+    }
 
     // Check if token is expired (verify() should handle this, but be explicit)
     const now = Math.floor(Date.now() / 1000);

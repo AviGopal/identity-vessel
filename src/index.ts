@@ -60,6 +60,7 @@
  *
  * Authentication Resolution:
  * - POST /v1/auth/resolve     - Resolve authentication impulse (JWT or API key)
+ * - POST /v1/auth/on-behalf-of - Federation ingress: caller validation + node/shape-bound token
  * - POST /v1/auth/minibob/signin - DEPRECATED (returns 410)
  * - POST /v2/auth/minibob/signin - DEPRECATED (returns 410)
  *
@@ -80,6 +81,7 @@ import { bootstrapAdminKey } from './resolvers/bootstrap-admin';
 import { loginWithPassword, signupWithPassword } from './resolvers/login';
 import { z } from 'zod';
 import { generateToken, verifyToken, getSecretInfo } from './services/jwt';
+import { mintOnBehalfOf, mintOboDbToken, parseAudienceHeader } from './services/obo';
 import type { GenerateTokenOptions } from './services/jwt';
 import { recordKeySession, listKeySessions } from './services/keySession';
 import { hashPassword, verifyPassword, validatePassword } from './services/password';
@@ -180,6 +182,7 @@ app.get('/capabilities', (c) => {
       'POST /v1/keys/revoke - Revoke an API key',
       // Authentication Resolution
       'POST /v1/auth/resolve - Resolve authentication impulse (JWT or API key)',
+      'POST /v1/auth/on-behalf-of - Federation ingress: validate a caller and mint a node+shape-bound token',
       'POST /v1/auth/minibob/signin - DEPRECATED (returns 410)',
       'POST /v2/auth/minibob/signin - DEPRECATED (returns 410)'
     ],
@@ -207,7 +210,10 @@ const resolveSchema = z.object({
       }),
       z.object({
         type: z.literal('session'),
-        token: z.string()
+        token: z.string(),
+        // The audience a validator serves, `{ node, shape }`. Only meaningful for a
+        // federation on-behalf-of token, which must then have been minted for exactly it.
+        audience: z.object({ node: z.string(), shape: z.string() }).optional(),
       })
     ])
   })
@@ -252,7 +258,8 @@ app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 100, buck
     // Branch 1: nested impulse form — body has an `impulse` field.
     if (body && typeof body === 'object' && body.impulse) {
       const { impulse } = resolveSchema.parse(body);
-      const result = await resolveAuthentication(impulse);
+      const audience = (impulse.pointer as any).audience ?? parseAudienceHeader(c.req.header('X-Auth-Audience'));
+      const result = await resolveAuthentication(impulse, audience);
 
       if (!result.authenticated) {
         return c.json({
@@ -271,8 +278,11 @@ app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 100, buck
       // legacy payload so older callers that don't read `data.jwt` keep
       // working.
       const data: AuthenticationResult & { jwt?: string; jwt_expires_at?: string } = { ...result };
+      delete data.oboPayload;
       try {
-        const jwt = await generateToken({
+        // An on-behalf-of caller gets a DB token that keeps the OBO's audience and
+        // expiry; a general 15-minute session minted here would launder the grant.
+        const jwt = result.oboPayload ? await mintOboDbToken(result.oboPayload) : await generateToken({
           user_id: result.userId!,
           org_id: result.orgId!,
           role: ((result as any).role as GenerateTokenOptions['role']) || 'user',
@@ -339,7 +349,7 @@ app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 100, buck
       }, 400);
     }
 
-    const result = await resolveAuthentication(impulseFromHeader);
+    const result = await resolveAuthentication(impulseFromHeader, parseAudienceHeader(c.req.header('X-Auth-Audience')));
     if (!result.authenticated) {
       return c.json({
         valid: false,
@@ -353,7 +363,7 @@ app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 100, buck
     let jwt: string | undefined;
     let jwt_expires_at: string | undefined;
     try {
-      const minted = await generateToken({
+      const minted = result.oboPayload ? await mintOboDbToken(result.oboPayload) : await generateToken({
         user_id: result.userId!,
         org_id: result.orgId!,
         role: 'member',
@@ -385,7 +395,8 @@ app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 100, buck
       org_id: result.orgId,
       account_id: result.accountId,
       role: 'member',
-      key_id: result.type === 'api_key' ? result.keyId : undefined,
+      key_id: result.type === 'api_key' || result.obo ? result.keyId : undefined,
+      ...(result.obo ? { obo: result.obo } : {}),
       jwt,
       jwt_expires_at,
     });
@@ -398,6 +409,41 @@ app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 100, buck
       }
     }, 400);
   }
+});
+
+// ============================================================================
+// Federation ingress: on-behalf-of tokens
+// ============================================================================
+
+/**
+ * POST /v1/auth/on-behalf-of
+ *
+ * Called by a federation transport for every resolve that arrives over the overlay.
+ * The transport authenticates with ITS OWN key (the actor) and presents the CALLER's
+ * credential exactly as it crossed the overlay. Identity validates the caller (local
+ * HMAC first, then the key's own trusted issuer) and returns a short-lived token bound
+ * to this node and this shape, which the transport hands to the one local vessel that
+ * serves the shape. The caller's credential is never forwarded to a vessel.
+ *
+ * Request:  Authorization: ApiKey <transport key>
+ *           { caller: "ApiKey …" | "Bearer …", audience: { node, shape }, ttl_seconds? }
+ * Response: 200 { success, data: { token, expires_at, caller: {org_id,user_id,key_id,type}, audience } }
+ *           401 the transport's own credential failed; 403 the caller was refused
+ *           (CALLER_REJECTED, or OBO_NOT_DELEGABLE for an OBO token presented again).
+ *
+ * Error bodies never quote either credential.
+ */
+app.post('/v1/auth/on-behalf-of', createRateLimitMiddleware('auth_obo', 1200, bucketKeyIpAndApiKeyPrefix), async (c) => {
+  let body: any = {};
+  try { body = await c.req.json(); } catch { body = {}; }
+  const r = await mintOnBehalfOf(c.req.header('Authorization'), body?.caller, body?.audience, body?.ttl_seconds);
+  if (!r.ok) {
+    return c.json({ success: false, error: { code: r.code, message: r.message } }, r.status as 401 | 403 | 400);
+  }
+  return c.json({
+    success: true,
+    data: { token: r.token, expires_at: r.expires_at, caller: { org_id: r.caller.org_id, user_id: r.caller.user_id, key_id: r.caller.key_id, type: r.caller.type }, audience: r.audience },
+  });
 });
 
 // ============================================================================
@@ -553,7 +599,9 @@ app.post('/v1/jwt/verify', async (c) => {
     const body = await c.req.json();
     const { token } = verifyJWTSchema.parse(body);
 
-    const result = await verifyToken(token);
+    // Plain "who is this" verification accepts a federation on-behalf-of token and
+    // reports it as one; a validator that names its audience is held to it.
+    const result = await verifyToken(token, { allowObo: true, audience: parseAudienceHeader(c.req.header('X-Auth-Audience')) });
 
     if (!result.valid) {
       console.log('[JWT] Token verification failed:', { error: result.error });

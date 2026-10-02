@@ -92,6 +92,14 @@ export interface AuthenticationResult {
   type?: 'api_key' | 'session';
   scopes?: string[];
   reason?: string;
+  /**
+   * Present when the credential was a federation on-behalf-of token: the node and
+   * shape it was minted for and the ingress that obtained it. orgId/userId/keyId are
+   * the CALLER's, so a consumer authorizes the real caller, not the ingress.
+   */
+  obo?: { node: string; shape: string; actor_key_id?: string; expires_at?: string };
+  /** The decoded OBO payload, for the inline DB-token mint. Never serialized. */
+  oboPayload?: Record<string, unknown>;
 }
 
 // Cost Tracking Types

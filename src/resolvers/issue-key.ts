@@ -102,6 +102,7 @@ export async function authorizeAdmin(
       // verbatim in the 401 body. See services/redact.ts.
       return fail(401, 'INVALID_JWT', safeJwtErrorMessage(err));
     }
+    if (payload?.typ === 'obo') return fail(403, 'FORBIDDEN', 'An on-behalf-of token cannot authorize administration');
     const role = (payload?.role as string | undefined) ?? '';
     if (role !== 'admin' && role !== 'owner') return fail(403, 'FORBIDDEN', 'JWT role is not admin');
     return { ok: true };

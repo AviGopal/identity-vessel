@@ -19,6 +19,7 @@ import { validateKey } from '../services/validation';
 import { isKeyRevoked } from '../db/redis';
 import { traceAuthentication } from '../services/trace';
 import { verify } from 'hono/jwt';
+import { isOboPayload, oboAudienceMatches, type OboAudience } from '../services/obo';
 import {
   UserVesselClient,
   pickDefaultAccount,
@@ -87,7 +88,7 @@ async function enrichWithAccountId(
 /**
  * Resolve JWT session token
  */
-async function resolveJWT(token: string): Promise<AuthenticationResult> {
+async function resolveJWT(token: string, audience?: OboAudience | null): Promise<AuthenticationResult> {
   try {
     // HS512 to match the signer in services/jwt.ts:152 (which is HS512 to
     // satisfy SurrealDB's apikey_token access). HS256 here silently
@@ -97,6 +98,25 @@ async function resolveJWT(token: string): Promise<AuthenticationResult> {
     // generateToken() emits snake_case claims (org_id, user_id, account_id)
     // per the canonical JWT shape; legacy callers may have used camelCase, so
     // accept both forms.
+    if (isOboPayload(payload)) {
+      // A federation on-behalf-of token. It names the CALLER (so the consumer authorizes
+      // the real caller, never the ingress that obtained it) and is bound to one node
+      // and one shape. A validator that states which audience it serves is held to it.
+      const node = String(payload.aud ?? '').replace(/^substrate:/, '');
+      if (audience && !oboAudienceMatches(payload, audience)) {
+        return { authenticated: false, reason: 'on-behalf-of token was minted for a different node or shape' };
+      }
+      return {
+        authenticated: true,
+        orgId: payload.org_id as string,
+        userId: (payload.user_id ?? payload.sub) as string,
+        keyId: payload.caller_key_id as string | undefined,
+        type: 'session',
+        scopes: Array.isArray(payload.scopes) ? payload.scopes : ['read'],
+        obo: { node, shape: String(payload.obo_shape ?? ''), actor_key_id: payload.act?.key_id, expires_at: new Date(Number(payload.exp) * 1000).toISOString() },
+        oboPayload: payload,
+      };
+    }
     return {
       authenticated: true,
       orgId: (payload.org_id ?? payload.orgId) as string,
@@ -190,7 +210,8 @@ async function resolveAPIKey(apiKey: string): Promise<AuthenticationResult> {
  * Handles both JWT session tokens and API keys
  */
 async function _resolveAuthentication(
-  impulse: AuthenticationImpulse
+  impulse: AuthenticationImpulse,
+  audience?: OboAudience | null,
 ): Promise<AuthenticationResult> {
   // Use explicit pointer type instead of heuristic detection
   const pointerType = impulse.pointer.type;
@@ -203,7 +224,7 @@ async function _resolveAuthentication(
         reason: 'No session token provided'
       };
     }
-    const result = await resolveJWT(token);
+    const result = await resolveJWT(token, audience);
     return enrichWithAccountId(result, `Bearer ${token}`);
   } else if (pointerType === 'apiKey') {
     const apiKey = impulse.pointer.apiKey;
@@ -227,9 +248,10 @@ async function _resolveAuthentication(
  * Resolve an authentication impulse with trace collection
  */
 export async function resolveAuthentication(
-  impulse: AuthenticationImpulse
+  impulse: AuthenticationImpulse,
+  audience?: OboAudience | null,
 ): Promise<AuthenticationResult> {
-  return traceAuthentication(() => _resolveAuthentication(impulse));
+  return traceAuthentication(() => _resolveAuthentication(impulse, audience));
 }
 
 /**
