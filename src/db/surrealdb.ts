@@ -113,7 +113,11 @@ async function queryInternal<T = any>(
     }
     console.error('[SurrealDB] Query error:', error);
     console.error('[SurrealDB] Query:', sql);
-    console.error('[SurrealDB] Params:', params);
+    // Parameter NAMES only. This vessel's parameters are credentials more often than not
+    // (resolveAPIKeyLegacy binds the presented API key itself as $kp), and this line runs
+    // on every failed query: printing the values put a presented key in the journal once
+    // per failed auth, 61 lines on one fresh boot.
+    console.error('[SurrealDB] Params:', params ? Object.keys(params) : []);
     throw error;
   }
 }
