@@ -41,6 +41,12 @@ export interface AuthenticationTrace {
   };
 }
 
+/** Authentication traces not posted because no API key was configured (module lifetime). */
+let skippedNoKey = 0;
+export function authTracesSkippedNoKey(): number {
+  return skippedNoKey;
+}
+
 /**
  * Send authentication trace to activity-api for learning
  */
@@ -50,12 +56,24 @@ export async function sendAuthenticationTrace(trace: AuthenticationTrace): Promi
     return;
   }
 
+  // AUTHENTICATED, OR NOT AT ALL (2026-10-07, harm-stop). These traces used to post with only an X-Internal-Api-Key
+  // header, which activity-api checked for PRESENCE and never against a secret; the hub's activity-api is reachable from
+  // the internet, so that path let anyone inject traces into the learning store, and activity-api is removing it. Post
+  // with this vessel's API key, read at use time (SUBSTRATE_API_KEY is the rename alias). With no key, post nothing and
+  // count it: a literal stand-in key is exactly the forgery the header path allowed. Each post costs one cached key
+  // validation; auth successes are sampled at TRACE_SAMPLE_RATE, so tracing a validation cannot amplify.
+  const key = process.env.SUBSTRATE_API_KEY || process.env.METABOB_API_KEY || process.env.INTERNAL_API_KEY || '';
+  if (!key) {
+    skippedNoKey += 1;
+    return;
+  }
+
   try {
     const response = await fetch(`${ACTIVITY_API_ENDPOINT}/v2/activities/execution-traces`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Internal-Api-Key': process.env.INTERNAL_API_KEY ?? process.env.METABOB_API_KEY ?? 'identity-vessel',
+        Authorization: `ApiKey ${key}`,
       },
       body: JSON.stringify({
         template_id: 'auth_resolve_v1',
