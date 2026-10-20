@@ -60,6 +60,10 @@
  *
  * Authentication Resolution:
  * - POST /v1/auth/resolve     - Resolve authentication impulse (JWT or API key)
+ *   Also the door for the apiKey_write impulse (admin-only scope add, no rotation):
+ *   Header: Authorization: ApiKey <admin key> | Bearer <admin JWT>
+ *   Body:   { impulse: { pointer: { type: 'apiKey_write', key_id, add_scopes[] } } }
+ *   Response: { success, data: { key_id, scopes[], added[], changed } }
  * - POST /v1/auth/on-behalf-of - Federation ingress: caller validation + node/shape-bound token
  * - POST /v1/auth/minibob/signin - DEPRECATED (returns 410)
  * - POST /v2/auth/minibob/signin - DEPRECATED (returns 410)
@@ -77,6 +81,7 @@ import { validateKeyFormat, validateKey, parseApiKey } from './services/validati
 import { revokeKey, isKeyRevoked } from './db/redis';
 import { config } from './services/config';
 import { issueApiKey, authorizeAdmin } from './resolvers/issue-key';
+import { grantKeyScopes, API_KEY_WRITE_SHAPE } from './resolvers/grant-scope';
 import { bootstrapAdminKey } from './resolvers/bootstrap-admin';
 import { loginWithPassword, signupWithPassword } from './resolvers/login';
 import { z } from 'zod';
@@ -162,6 +167,12 @@ app.get('/capabilities', (c) => {
         description: 'Validates API keys (HMAC) and JWT session tokens',
         avgLatency: 2,
         cost: 0.0001
+      },
+      {
+        type: 'apiKey_write',
+        description: 'Admin-only: adds an allowlisted scope to an existing key, same key_id and secret (no rotation)',
+        avgLatency: 5,
+        cost: 0.0001
       }
     ],
     endpoints: [
@@ -181,7 +192,7 @@ app.get('/capabilities', (c) => {
       'POST /v1/keys/validate - Validate API key (format, signature, revocation)',
       'POST /v1/keys/revoke - Revoke an API key',
       // Authentication Resolution
-      'POST /v1/auth/resolve - Resolve authentication impulse (JWT or API key)',
+      'POST /v1/auth/resolve - Resolve authentication impulse (JWT or API key), or an apiKey_write impulse (admin-only scope add)',
       'POST /v1/auth/on-behalf-of - Federation ingress: validate a caller and mint a node+shape-bound token',
       'POST /v1/auth/minibob/signin - DEPRECATED (returns 410)',
       'POST /v2/auth/minibob/signin - DEPRECATED (returns 410)'
@@ -253,6 +264,21 @@ app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 100, buck
       body = await c.req.json();
     } catch {
       body = {};
+    }
+
+    // Branch 0: the apiKey_write impulse — this door's one write. The caller's own
+    // credential (Authorization header) must be admin; the pointer names the target key
+    // by key_id only, so no key value travels. See resolvers/grant-scope.ts.
+    if (body?.impulse?.pointer?.type === API_KEY_WRITE_SHAPE
+        && (body.impulse.type === undefined || body.impulse.type === API_KEY_WRITE_SHAPE)) {
+      const granted = await grantKeyScopes(body.impulse.pointer, c.req.header('Authorization'));
+      if (!granted.ok) {
+        return c.json({ success: false, error: { code: granted.code, message: granted.message } }, granted.status as any);
+      }
+      return c.json({
+        success: true,
+        data: { key_id: granted.key_id, scopes: granted.scopes, added: granted.added, changed: granted.changed },
+      });
     }
 
     // Branch 1: nested impulse form — body has an `impulse` field.

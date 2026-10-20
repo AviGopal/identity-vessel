@@ -113,10 +113,12 @@ export function loadConfig(): IdentityVesselConfig {
       retryAttempts: parseEnvInt('DISCOVERY_RETRY_ATTEMPTS', 3),
       retryBackoffMs: parseEnvInt('DISCOVERY_RETRY_BACKOFF_MS', 1000),
       bootstrapDelayMs: parseEnvInt('DISCOVERY_BOOTSTRAP_DELAY_MS', 30000), // 30 seconds
-      // One shape: 'authentication'. The two credential forms (apiKey, session)
-      // are pointer.type values, not shapes — see shape-dispatch.config.json.
+      // 'authentication' (read): the two credential forms (apiKey, session) are
+      // pointer.type values, not shapes — see shape-dispatch.config.json.
+      // 'apiKey_write' (admin-only scope add, no rotation): resolvers/grant-scope.ts.
       shapes: [
         'authentication',
+        'apiKey_write',
       ],
     },
 

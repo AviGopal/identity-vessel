@@ -1,5 +1,6 @@
 {
   "shape_to_pointer_types": {
-    "authentication": ["apiKey", "session", "jwtToken"]
+    "authentication": ["apiKey", "session", "jwtToken"],
+    "apiKey_write": ["apiKey_write"]
   }
 }

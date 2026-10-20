@@ -73,7 +73,7 @@ function fail(status: number, code: FailureCode, message: string): IssueKeyFailu
 
 export async function authorizeAdmin(
   authHeader: string | undefined,
-): Promise<{ ok: true } | IssueKeyFailure> {
+): Promise<{ ok: true; org_id?: string; user_id?: string } | IssueKeyFailure> {
   if (!authHeader) return fail(401, 'MISSING_AUTH_HEADER', 'Missing Authorization header');
 
   if (authHeader.startsWith('ApiKey ')) {
@@ -86,7 +86,8 @@ export async function authorizeAdmin(
     if (!(validation.scopes || []).includes('admin')) {
       return fail(403, 'FORBIDDEN', 'API key does not have admin scope');
     }
-    return { ok: true };
+    // The admin's own org and user, for a caller that scopes its write to them (grant-scope.ts).
+    return { ok: true, org_id: validation.orgId, user_id: validation.userId };
   }
 
   if (authHeader.startsWith('Bearer ')) {
@@ -105,7 +106,7 @@ export async function authorizeAdmin(
     if (payload?.typ === 'obo') return fail(403, 'FORBIDDEN', 'An on-behalf-of token cannot authorize administration');
     const role = (payload?.role as string | undefined) ?? '';
     if (role !== 'admin' && role !== 'owner') return fail(403, 'FORBIDDEN', 'JWT role is not admin');
-    return { ok: true };
+    return { ok: true, org_id: payload?.org_id, user_id: payload?.user_id ?? payload?.sub };
   }
 
   return fail(401, 'INVALID_AUTH_SCHEME', 'Authorization must start with "ApiKey " or "Bearer "');
