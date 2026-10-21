@@ -83,7 +83,10 @@ export async function sendAuthenticationTrace(trace: AuthenticationTrace): Promi
         start_time: new Date(trace.startTime).toISOString(),
         end_time: new Date(trace.endTime).toISOString(),
         duration_ms: trace.durationMs,
-        org_id: trace.orgId || 'unknown',
+        // NO BODY org_id: THIS TRACE IS IDENTITY'S OWN EXECUTION (2026-10-21). activity-api files a trace under the org
+        // of the credential that posted it and refuses a body org_id naming any other org (403 ORG_MISMATCH, nothing
+        // stored). identity posts with its own key, so the org it authenticated is not this trace's org; it is the
+        // trace's subject and goes in metadata.subject_org_id below.
         user_id: trace.userId || 'unknown',
         error_message: trace.error,
         // GRADE IT, BECAUSE AN UNGRADED TRACE IS NOT NEUTRAL (2026-08-09).
@@ -111,7 +114,8 @@ export async function sendAuthenticationTrace(trace: AuthenticationTrace): Promi
           activity_type: trace.activityType,
           key_id: trace.keyId,
           error: trace.error,
-          ...trace.metadata
+          ...trace.metadata,
+          subject_org_id: trace.orgId || 'unknown',
         }
       })
     });
@@ -122,7 +126,7 @@ export async function sendAuthenticationTrace(trace: AuthenticationTrace): Promi
       console.log('[Trace] Authentication trace sent:', {
         durationMs: trace.durationMs,
         success: trace.success,
-        orgId: trace.orgId,
+        subjectOrgId: trace.orgId,
         keyId: trace.keyId
       });
     }
