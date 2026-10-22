@@ -14,9 +14,9 @@
  *
  * It runs on the SAME connection identity issues and renames keys on: db/surrealdb.ts
  * query(), the root-signed-in session (mintApiKey's CREATE, PUT /v1/keys/:keyId's
- * UPDATE). Root bypasses record PERMISSIONS, and the api_key table carries none that
- * could guard this live, so EVERY guard below is in this code, and each is tested with
- * a database that would permit the write:
+ * UPDATE). Root bypasses record PERMISSIONS, so the api_key table's (migration 001,
+ * which guard only token-scoped sessions) cannot guard this write, and EVERY guard below
+ * is in this code, each tested with a database that would permit the write:
  *   - Admin only: authorizeAdmin (ApiKey with scope admin, or JWT role admin/owner).
  *   - Same org: the row's org_id must be the admin's own org (FORBIDDEN otherwise), and
  *     the UPDATE repeats it in its WHERE clause.

@@ -3,10 +3,10 @@
 --
 -- CLOSES a latent cross-tenant isolation hole: users / organizations /
 -- organization_members were live as `TYPE ANY SCHEMALESS PERMISSIONS NONE`
--- (created implicitly via INSERT — identity-vessel's SCHEMA_AUTOAPPLY is off in
--- the substrate deployment and user-vessel, the nominal schema owner, is not
--- deployed). One tenant is seeded today and every vessel connects as SurrealDB
--- ROOT (which bypasses record PERMISSIONS), so this is LATENT, not a live leak —
+-- (created implicitly via INSERT — identity-vessel's migrations were not applied
+-- on the substrate and user-vessel, the nominal schema owner, is not deployed).
+-- One tenant is seeded today and every vessel connects as SurrealDB ROOT
+-- (which bypasses record PERMISSIONS), so this is LATENT, not a live leak —
 -- it becomes a real cross-tenant leak the moment a 2nd org is provisioned while
 -- any $token/JWT-scoped path reaches these tables. These clauses mirror the
 -- pattern already carried by the `impulse` table.
@@ -23,15 +23,12 @@
 -- unaffected — the login-path `SELECT ... FROM users WHERE email = $email` runs
 -- as root and so bypasses these select PERMISSIONS, i.e. login cannot break).
 --
--- APPLIED LIVE 2026-07-23 (operator, root session, individually) to the running
--- learning_loop DB — this file makes that durable across a FRESH deploy. To take
--- effect on a fresh DB it must be applied by the owning path: either
---   (a) identity-vessel with SCHEMA_AUTOAPPLY=true AND this file added to the
---       migration list in src/index.ts (note: that also applies 001-003), or
---   (b) the deployment-repo init-container, or
---   (c) user-vessel deployed as the nominal owner.
--- The owner decision is deliberately left to the deploy layer (law 11) — see the
--- filed gap `identity-tenant-isolation-fresh-deploy-wiring`.
+-- Applied by identity-vessel on unit start like every file in this directory
+-- (src/db/migrations.ts), recorded in init_migrations, so a fresh deploy gets
+-- it too. It was first applied by hand to a running database on 2026-07-23.
+-- Every statement is DEFINE TABLE ... OVERWRITE and nothing here writes a row:
+-- re-applying it resets the three table definitions to these and leaves their
+-- rows as they are.
 -- =============================================================================
 
 -- organizations: an org is visible to a token scoped to that org.
