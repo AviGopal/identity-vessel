@@ -1581,37 +1581,27 @@ const server = {
 };
 
 // ============================================================================
-// Schema Bootstrap (identity-vessel-owned tables)
+// Schema migrations (identity-vessel-owned tables)
 // ============================================================================
 //
-// Off by default — production Helm charts run schema migrations through a
-// dedicated init container.  Local dev sets SCHEMA_AUTOAPPLY=true so the
-// vessel applies its own migrations on startup.  Each migration file uses
-// DEFINE … OVERWRITE so a re-run is safe.
+// Applied on every start, before the server listens: each file in sql/migrations
+// not yet recorded in init_migrations is applied in filename order and recorded
+// (db/migrations.ts). A file that fails is recorded as failed and the start
+// fails with it, so identity never serves keys over a schema it could not apply.
 
-if ((process.env.SCHEMA_AUTOAPPLY || 'false').toLowerCase() === 'true') {
-  (async () => {
-    const { query } = await import('./db/surrealdb');
-    const migrations = ['001-api-keys.surql', '002-users-password-hash.surql', '003-key-sessions.surql'];
-    for (const file of migrations) {
-      try {
-        const sql = await Bun.file(`${import.meta.dir}/../sql/migrations/${file}`).text();
-        await query(sql);
-        console.log('[Schema] applied', { file });
-      } catch (err) {
-        // Non-fatal — log and continue.  An init-container or operator-run
-        // migration is expected to have placed the schema in production.
-        console.warn('[Schema] apply failed (may already be applied)', {
-          file,
-          err: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-  })().catch((err) => {
-    console.warn('[Schema] bootstrap error', {
+{
+  const { getSurrealDB } = await import('./db/surrealdb');
+  const { applyMigrations } = await import('./db/migrations');
+  try {
+    const db = await getSurrealDB();
+    const report = await applyMigrations((sql, params) => db.query(sql, params) as Promise<unknown[]>);
+    console.log('[Schema] migrations current', report);
+  } catch (err) {
+    console.error('[Schema] FATAL: migrations did not apply; not starting', {
       err: err instanceof Error ? err.message : String(err),
     });
-  });
+    process.exit(1);
+  }
 }
 
 // ============================================================================
