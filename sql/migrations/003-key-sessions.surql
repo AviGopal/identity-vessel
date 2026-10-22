@@ -22,8 +22,10 @@ DEFINE FIELD OVERWRITE key_id ON key_session TYPE string
 DEFINE FIELD OVERWRITE org_id ON key_session TYPE string
   ASSERT $value != NONE AND string::starts_with($value, "organizations:");
 
-DEFINE FIELD OVERWRITE user_id ON key_session TYPE option<string>
-  ASSERT $value = NONE OR string::starts_with($value, "users:");
+-- NULL as well as NONE: recordKeySession writes user_id = NULL for a key with no
+-- user, and rows it wrote before this schema carry it.
+DEFINE FIELD OVERWRITE user_id ON key_session TYPE option<string | null>
+  ASSERT $value = NONE OR $value = NULL OR string::starts_with($value, "users:");
 
 DEFINE FIELD OVERWRITE issued_at ON key_session TYPE datetime
   DEFAULT time::now();

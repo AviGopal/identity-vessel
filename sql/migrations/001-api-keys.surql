@@ -15,6 +15,18 @@
 -- org_id and user_id are TYPE string holding record-reference-as-string
 -- (e.g., "organizations:metabob", "users:abc"). Matches the deployed canary
 -- schema for `api_key` (singular).
+--
+-- Rows exist before this file applies (the table was created SCHEMALESS by the
+-- writers), and SCHEMAFULL holds them to it: a field the writer sets that is not
+-- declared is dropped from every new row, and a required field the writer never
+-- set fails every index build and every later UPDATE of the old rows. So every
+-- field issue-key.ts writes is declared, and every field it does not write is
+-- optional.
+
+-- prefix: the display prefix issue-key.ts writes on every key and GET /v1/keys
+-- reads. Declared BEFORE the table turns SCHEMAFULL, so there is no instant at
+-- which a new key's prefix is dropped.
+DEFINE FIELD OVERWRITE prefix ON api_key TYPE option<string>;
 
 DEFINE TABLE OVERWRITE api_key SCHEMAFULL
   PERMISSIONS
@@ -48,7 +60,9 @@ DEFINE FIELD OVERWRITE name ON api_key TYPE option<string>;
 
 DEFINE FIELD OVERWRITE created_at ON api_key TYPE datetime
   DEFAULT time::now();
-DEFINE FIELD OVERWRITE updated_at ON api_key TYPE datetime
+-- Optional: no writer sets it on an existing row, and the rows written before
+-- this schema have none.
+DEFINE FIELD OVERWRITE updated_at ON api_key TYPE option<datetime>
   DEFAULT time::now();
 DEFINE FIELD OVERWRITE expires_at ON api_key TYPE option<datetime>;
 DEFINE FIELD OVERWRITE last_used_at ON api_key TYPE option<datetime>;
