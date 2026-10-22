@@ -1588,13 +1588,16 @@ const server = {
 // not yet recorded in init_migrations is applied in filename order and recorded
 // (db/migrations.ts). A file that fails is recorded as failed and the start
 // fails with it, so identity never serves keys over a schema it could not apply.
+// The step is bounded, so a datastore that never answers fails the start as well.
 
 {
   const { getSurrealDB } = await import('./db/surrealdb');
-  const { applyMigrations } = await import('./db/migrations');
+  const { migrateOnStart } = await import('./db/migrations');
   try {
-    const db = await getSurrealDB();
-    const report = await applyMigrations((sql, params) => db.query(sql, params) as Promise<unknown[]>);
+    const report = await migrateOnStart(async () => {
+      const db = await getSurrealDB();
+      return (sql, params) => db.query(sql, params) as Promise<unknown[]>;
+    });
     console.log('[Schema] migrations current', report);
   } catch (err) {
     console.error('[Schema] FATAL: migrations did not apply; not starting', {

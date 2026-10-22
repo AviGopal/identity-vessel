@@ -96,7 +96,7 @@ describe('unit start applies identity migrations', () => {
   test('the startup path runs the runner unconditionally and reads no switch for it', () => {
     const index = readFileSync(join(import.meta.dir, '../index.ts'), 'utf8');
     expect(index).not.toContain('SCHEMA_AUTOAPPLY');
-    expect(index).toMatch(/await applyMigrations\(/);
+    expect(index).toMatch(/await migrateOnStart\(/);
   });
 
   test('a migration the ledger already records is not run again', async () => {
