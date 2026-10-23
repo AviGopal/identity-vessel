@@ -87,7 +87,8 @@ Returns (200 OK):
     "userId": "usr_123",
     "keyId": "key_abc123",
     "type": "api_key",
-    "scopes": ["read", "write"]
+    "scopes": ["read", "write"],
+    "name": "ci-runner"
   }
 }
 ```

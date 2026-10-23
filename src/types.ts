@@ -37,6 +37,8 @@ export interface ValidationResult {
   userId?: string;
   keyId?: string;
   scopes?: string[];
+  /** The api_key row's human-readable name; null when the key has none. */
+  name?: string | null;
   error?: string;
 }
 
@@ -91,6 +93,8 @@ export interface AuthenticationResult {
   accountId?: string;
   type?: 'api_key' | 'session';
   scopes?: string[];
+  /** The validated api key's name (null when unnamed); absent for a session. */
+  name?: string | null;
   reason?: string;
   /**
    * Present when the credential was a federation on-behalf-of token: the node and

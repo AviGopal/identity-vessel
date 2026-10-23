@@ -245,7 +245,16 @@ export function validateKeyFormat(apiKey: string): ValidationResult {
  * legacy default.
  */
 export async function lookupKeyScopes(keyId: string): Promise<string[] | null> {
-  if (!keyId) return null;
+  return (await lookupKeyRow(keyId)).scopes;
+}
+
+/**
+ * The same single api_key row read, also carrying the key's human-readable
+ * `name` (null when the row is missing or unnamed) so a consumer can attribute a
+ * write by it. Only scopes and name are selected: never the key value or hash.
+ */
+async function lookupKeyRow(keyId: string): Promise<{ scopes: string[] | null; name: string | null }> {
+  if (!keyId) return { scopes: null, name: null };
 
   try {
     const query = await getQueryFn();
@@ -254,30 +263,31 @@ export async function lookupKeyScopes(keyId: string): Promise<string[] | null> {
     // entirely and match by `key_id` (HMAC-embedded) or `key_prefix` (operator
     // label). Both fields are indexed (idx_api_key_key_id, idx_api_key_key_prefix).
     const result = await query(
-      `SELECT scopes FROM api_key WHERE key_id = $key_id OR key_prefix = $key_id LIMIT 1;`,
+      `SELECT scopes, name FROM api_key WHERE key_id = $key_id OR key_prefix = $key_id LIMIT 1;`,
       { key_id: keyId }
     );
 
     // SurrealDB returns the result set directly via our query() helper.
     const rows = Array.isArray(result) ? result : (result?.result ?? []);
     if (!Array.isArray(rows) || rows.length === 0) {
-      return null;
+      return { scopes: null, name: null };
     }
 
+    const name = typeof rows[0]?.name === 'string' ? rows[0].name : null;
     const scopes = rows[0]?.scopes;
     if (!Array.isArray(scopes) || scopes.length === 0) {
-      return null;
+      return { scopes: null, name };
     }
 
     // Defensive: ensure every entry is a string before returning.
-    return scopes.every((s) => typeof s === 'string') ? scopes : null;
+    return { scopes: scopes.every((s) => typeof s === 'string') ? scopes : null, name };
   } catch (error) {
     // Graceful degradation: log once, return null so caller uses defaults.
     console.warn('[validation] lookupKeyScopes failed, falling back to defaults', {
       key_id: keyId,
       error: error instanceof Error ? error.message : String(error),
     });
-    return null;
+    return { scopes: null, name: null };
   }
 }
 
@@ -331,6 +341,7 @@ async function delegateValidation(apiKey: string, iss: string): Promise<Validati
       userId: data.user_id,
       keyId: data.key_id,
       scopes: Array.isArray(data.scopes) ? data.scopes : undefined,
+      name: typeof data.name === 'string' ? data.name : null,
     };
   } catch (error) {
     return {
@@ -356,8 +367,8 @@ export async function validateKey(apiKey: string): Promise<ValidationResult> {
   const result = validateKeyFormat(apiKey);
 
   if (result.valid && result.keyId) {
-    const scopes = await lookupKeyScopes(result.keyId);
-    return scopes !== null ? { ...result, scopes } : result;
+    const { scopes, name } = await lookupKeyRow(result.keyId);
+    return scopes !== null ? { ...result, scopes, name } : { ...result, name };
   }
 
   // Local verification failed — maybe a foreign key signed by a trusted issuer.

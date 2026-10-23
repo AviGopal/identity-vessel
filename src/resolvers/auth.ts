@@ -148,7 +148,7 @@ async function resolveAPIKeyLegacy(apiKey: string): Promise<AuthenticationResult
   try {
     const { query } = await import('../db/surrealdb');
     const rows = await query<any[]>(
-      `SELECT id, key_id, org_id, user_id, scopes, is_active FROM api_key WHERE key_prefix = $kp LIMIT 1;`,
+      `SELECT id, key_id, org_id, user_id, scopes, name, is_active FROM api_key WHERE key_prefix = $kp LIMIT 1;`,
       { kp: apiKey },
     );
     const row = Array.isArray(rows) ? rows[0] : undefined;
@@ -161,6 +161,7 @@ async function resolveAPIKeyLegacy(apiKey: string): Promise<AuthenticationResult
       keyId: stableId,
       type: 'api_key',
       scopes: Array.isArray(row.scopes) ? row.scopes : ['read', 'write'],
+      name: typeof row.name === 'string' ? row.name : null,
     };
   } catch {
     return null;
@@ -204,7 +205,8 @@ async function resolveAPIKey(apiKey: string): Promise<AuthenticationResult> {
     userId: validation.userId,
     keyId: validation.keyId,
     type: 'api_key',
-    scopes: validation.scopes ?? ['read', 'write']
+    scopes: validation.scopes ?? ['read', 'write'],
+    name: validation.name ?? null,
   };
 }
 

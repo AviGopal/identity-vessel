@@ -52,7 +52,7 @@
  *
  * - POST /v1/keys/validate    - Validate API key (direct call)
  *   Request:  { api_key }
- *   Response: { valid, org_id?, user_id?, key_id?, scopes[]?, role?, error? }
+ *   Response: { valid, org_id?, user_id?, key_id?, scopes[]?, name?, role?, error? }
  *
  * - POST /v1/keys/revoke      - Revoke an API key
  *   Request:  { key_id } or { api_key }
@@ -429,6 +429,8 @@ app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 100, buck
       scopes: result.scopes,
       role: 'member',
       key_id: result.type === 'api_key' || result.obo ? result.keyId : undefined,
+      // The validated key's name (null when unnamed), so a consumer can attribute a write by it.
+      ...(result.type === 'api_key' ? { name: result.name ?? null } : {}),
       ...(result.obo ? { obo: result.obo } : {}),
       jwt,
       jwt_expires_at,
@@ -1120,7 +1122,7 @@ const validateKeySchema = z.object({
  * This is the canonical validation endpoint - all services should call this.
  *
  * Request:  { api_key: string }
- * Response: { valid: boolean, org_id?, user_id?, key_id?, scopes?, role?, error? }
+ * Response: { valid: boolean, org_id?, user_id?, key_id?, scopes?, name?, role?, error? }
  */
 app.post('/v1/keys/validate', createRateLimitMiddleware('keys_validate', 100), async (c) => {
   try {
@@ -1172,6 +1174,8 @@ app.post('/v1/keys/validate', createRateLimitMiddleware('keys_validate', 100), a
         key_id: validation.keyId,
         // ?? rather than || so an explicit empty/admin scope set from DB wins.
         scopes: validation.scopes ?? ['read', 'write'],
+        // The key's name (null when unnamed), so a consumer can attribute a write by it.
+        name: validation.name ?? null,
         role: 'user', // Default role - caller can override based on their DB
       },
     });
