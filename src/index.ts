@@ -424,6 +424,9 @@ app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 100, buck
       user_id: result.userId,
       org_id: result.orgId,
       account_id: result.accountId,
+      // The credential's scopes, as the nested form already answers them, so a client behind a proxy can refuse a
+      // write for a read-only key locally instead of trusting the next hop to.
+      scopes: result.scopes,
       role: 'member',
       key_id: result.type === 'api_key' || result.obo ? result.keyId : undefined,
       ...(result.obo ? { obo: result.obo } : {}),
