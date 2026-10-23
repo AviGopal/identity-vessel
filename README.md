@@ -298,37 +298,11 @@ USER_VESSEL_URL=http://user-vessel:8080      # User-vessel API for revocation ch
 USER_VESSEL_ENDPOINT=http://user-vessel.activity-system.svc.cluster.local:8080  # MCP query target for account_id lookup
 USER_VESSEL_ENABLED=true                     # Set to "false" to disable account_id enrichment
 USER_VESSEL_TIMEOUT_MS=1000                  # Per-call timeout for the lookup
-
-# Trace collection and learning
-ACTIVITY_API_ENDPOINT=http://metabob-activity-api.activity-system.svc.cluster.local:8080  # Where traces are sent (default: cluster-local)
-TRACE_SAMPLE_RATE=0.01                       # Sampling rate for successful auth (default: 0.01 = 1%)
-ALWAYS_TRACE_FAILURES=false                  # Whether to trace all failed auth attempts (default: true if unset, false in Helm)
 ```
 
-### Trace Sampling Strategy
+### Authentication outcome counts
 
-Authentication operations send execution traces to the activity API for learning. To reduce database load:
-
-- **Successful authentications**: Sampled at `TRACE_SAMPLE_RATE` (default 1%)
-- **Failed authentications**: Controlled by `ALWAYS_TRACE_FAILURES`
-  - If `true` (default when unset): All failures are traced for debugging
-  - If `false` (Helm production default): Failures are not traced
-
-**Why disable failure tracing in production?**
-
-Failed authentication attempts are often:
-- Brute force attacks with invalid keys
-- Expired tokens from legitimate clients (already logged)
-- Misconfigured clients retrying indefinitely
-
-These generate high-volume, low-value traces that pollute the learning database. In production, we set `ALWAYS_TRACE_FAILURES=false` to avoid trace spam while still capturing a representative sample (1%) of successful operations.
-
-**When to enable failure tracing:**
-- Local development (debugging auth issues)
-- Investigating authentication problems in staging
-- Analyzing attack patterns (temporarily, with external analysis)
-
-Traces are sent asynchronously and fail-open (authentication never blocks on trace collection).
+Authentications are not traced. Each resolve counts its outcome by reason class (`success`, `invalid`, `revoked`, `expired`, `unknown`) in memory since process start, and `GET /health` carries the counts under `checks.auth` with the time counting began (`since`). The counts are integers only: no key ids, org ids, tokens or reason text.
 
 ## Security
 

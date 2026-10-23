@@ -18,6 +18,7 @@ import type { AuthenticationImpulse, AuthenticationResult } from '../types';
 import { validateKey } from '../services/validation';
 import { isKeyRevoked } from '../db/redis';
 import { traceAuthentication } from '../services/trace';
+import { safeJwtErrorMessage } from '../services/redact';
 import { verify } from 'hono/jwt';
 import { isOboPayload, oboAudienceMatches, type OboAudience } from '../services/obo';
 import {
@@ -126,9 +127,12 @@ async function resolveJWT(token: string, audience?: OboAudience | null): Promise
       scopes: ['read', 'write'] // Sessions get full access
     };
   } catch (error) {
+    // The error CLASS names the reason (expired vs malformed vs bad signature), and the outcome
+    // counts in services/trace.ts tell expired apart by it; the mapping never reads `.message`,
+    // which can carry the token.
     return {
       authenticated: false,
-      reason: 'Invalid or expired JWT token'
+      reason: safeJwtErrorMessage(error)
     };
   }
 }
@@ -245,7 +249,7 @@ async function _resolveAuthentication(
 }
 
 /**
- * Resolve an authentication impulse with trace collection
+ * Resolve an authentication impulse, counting its outcome (services/trace.ts)
  */
 export async function resolveAuthentication(
   impulse: AuthenticationImpulse,

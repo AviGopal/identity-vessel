@@ -294,9 +294,9 @@ export async function lookupKeyScopes(keyId: string): Promise<string[] | null> {
  *
  * A spoke cannot recompute the HMAC of a hub-issued key (its API_KEY_SECRET
  * differs), so it POSTs the key to the issuer's canonical /v1/keys/validate and
- * trusts that verdict. Mirrors the raw-fetch egress used by services/trace.ts;
- * `iss` is the key's self-described issuer endpoint carried in the key itself,
- * not a discovery capability row, so a direct fetch is the intended path (there
+ * trusts that verdict. A raw fetch: `iss` is the key's self-described issuer
+ * endpoint carried in the key itself, not a discovery capability row, so a
+ * direct fetch is the intended path (there
  * is no libp2p egress in identity-vessel to route through).
  */
 async function delegateValidation(apiKey: string, iss: string): Promise<ValidationResult> {

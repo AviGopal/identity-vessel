@@ -1,191 +1,73 @@
 /**
- * Trace collection for authentication operations
- * Sends execution metrics to activity-api for learning
+ * Authentication outcome counts, read through identity's own /health body.
+ *
+ * NO TELEMETRY TRACE PER AUTH RESOLVE (2026-10-22). Every resolve used to POST an `auth_resolve_v1` execution trace to
+ * activity-api, steered by env switches (a sample rate, an always-trace-failures flag, an endpoint and a key fallback
+ * chain) that no trace or walk could see. A credential check is not a gradable execution: it has no target shapes and
+ * no reach verdict, so the traces taught the learner nothing, and since failures were traced unsampled, every bad key
+ * presented to identity became a trace-store write. What an operator or a self-observer needs from it is how
+ * authentications are going, and that is a handful of integers.
+ *
+ * So each resolve now bumps one in-memory count by reason class, since process start (or the last reset), and /health
+ * carries the counts. They hold integers and a timestamp only: no key ids, org ids, tokens or reason strings (a reason
+ * can quote upstream text).
+ *
+ * Reason classes:
+ *   success: the credential authenticated;
+ *   revoked: a valid key that has been revoked;
+ *   expired: a JWT past its expiry;
+ *   invalid: any other refusal (bad format or signature, unknown key, missing credential, wrong audience);
+ *   unknown: the resolve threw instead of answering.
  */
 
-const ACTIVITY_API_ENDPOINT = process.env.ACTIVITY_API_ENDPOINT || 'http://activity-api.activity-system.svc.cluster.local:8080';
+export type AuthOutcomeClass = 'success' | 'invalid' | 'revoked' | 'expired' | 'unknown';
 
-// Sampling configuration - only send a percentage of traces
-const TRACE_SAMPLE_RATE = parseFloat(process.env.TRACE_SAMPLE_RATE || '0.01'); // 1% by default
-// Default behavior: true if env var is not set to literal 'false'
-// Helm deployment sets this to 'false' to reduce DB load from failed auth attempts
-const ALWAYS_TRACE_FAILURES = process.env.ALWAYS_TRACE_FAILURES !== 'false';
-
-/**
- * Decide if we should sample this trace
- */
-function shouldSample(success: boolean): boolean {
-  // Always trace failures for debugging
-  if (!success && ALWAYS_TRACE_FAILURES) {
-    return true;
-  }
-
-  // Sample successful requests based on rate
-  return Math.random() < TRACE_SAMPLE_RATE;
+export interface AuthOutcomeCounts {
+  success: number;
+  invalid: number;
+  revoked: number;
+  expired: number;
+  unknown: number;
+  /** When counting started: process start, or the last reset. */
+  since: string;
 }
 
-export interface AuthenticationTrace {
-  activityType: 'authentication_resolution';
-  startTime: number;
-  endTime: number;
-  durationMs: number;
-  success: boolean;
-  orgId?: string;
-  userId?: string;
-  keyId?: string;
-  error?: string;
-  metadata?: {
-    cached?: boolean;
-    revoked?: boolean;
-    signatureValid?: boolean;
-  };
+function zeroCounts(): AuthOutcomeCounts {
+  return { success: 0, invalid: 0, revoked: 0, expired: 0, unknown: 0, since: new Date().toISOString() };
 }
 
-/** Authentication traces not posted because no API key was configured (module lifetime). */
-let skippedNoKey = 0;
-export function authTracesSkippedNoKey(): number {
-  return skippedNoKey;
+let counts: AuthOutcomeCounts = zeroCounts();
+
+/** A copy of the current counts. */
+export function authOutcomeCounts(): AuthOutcomeCounts {
+  return { ...counts };
 }
 
-/**
- * Send authentication trace to activity-api for learning
- */
-export async function sendAuthenticationTrace(trace: AuthenticationTrace): Promise<void> {
-  // Apply sampling - only send a percentage of traces
-  if (!shouldSample(trace.success)) {
-    return;
-  }
+/** Zero the counts and restamp `since`. */
+export function resetAuthOutcomeCounts(): void {
+  counts = zeroCounts();
+}
 
-  // AUTHENTICATED, OR NOT AT ALL (2026-10-07, harm-stop). These traces used to post with only an X-Internal-Api-Key
-  // header, which activity-api checked for PRESENCE and never against a secret; the hub's activity-api is reachable from
-  // the internet, so that path let anyone inject traces into the learning store, and activity-api is removing it. Post
-  // with this vessel's API key, read at use time (SUBSTRATE_API_KEY is the rename alias). With no key, post nothing and
-  // count it: a literal stand-in key is exactly the forgery the header path allowed. Each post costs one cached key
-  // validation; auth successes are sampled at TRACE_SAMPLE_RATE, so tracing a validation cannot amplify.
-  const key = process.env.SUBSTRATE_API_KEY || process.env.METABOB_API_KEY || process.env.INTERNAL_API_KEY || '';
-  if (!key) {
-    skippedNoKey += 1;
-    return;
-  }
-
-  try {
-    const response = await fetch(`${ACTIVITY_API_ENDPOINT}/v2/activities/execution-traces`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `ApiKey ${key}`,
-      },
-      body: JSON.stringify({
-        template_id: 'auth_resolve_v1',
-        execution_id: `auth_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-        status: trace.success ? 'completed' : 'failure',
-        success: trace.success,
-        start_time: new Date(trace.startTime).toISOString(),
-        end_time: new Date(trace.endTime).toISOString(),
-        duration_ms: trace.durationMs,
-        // NO BODY org_id: THIS TRACE IS IDENTITY'S OWN EXECUTION (2026-10-21). activity-api files a trace under the org
-        // of the credential that posted it and refuses a body org_id naming any other org (403 ORG_MISMATCH, nothing
-        // stored). identity posts with its own key, so the org it authenticated is not this trace's org; it is the
-        // trace's subject and goes in metadata.subject_org_id below.
-        user_id: trace.userId || 'unknown',
-        error_message: trace.error,
-        // GRADE IT, BECAUSE AN UNGRADED TRACE IS NOT NEUTRAL (2026-08-09).
-        //
-        // These traces carried no tags at all, so every one reached the ribosome as
-        // `ungraded / no-reach-tag` — the auth_* family was one of the two largest
-        // ungraded groups in a 3h census. An ungraded execution is one the ribosome
-        // must skip ("not honestly reached"), so the family sat permanently in a
-        // state that reads as "we could not tell" when the truth is "there is
-        // nothing to tell".
-        //
-        // reached:false is the correct value and NOT a placeholder. An authentication
-        // is telemetry, not a goal walk: it has no target shapes and no reach verdict,
-        // and ribosome-vessel treats reached:true as EXTRACT FROM THIS. Minting an
-        // activity template out of a credential check would be nonsense. Tagging it
-        // false says "graded, and deliberately not an extraction donor" rather than
-        // leaving the consumer to guess.
-        tags: [
-          'identity-vessel',
-          'reached:false',
-          'telemetry:auth',
-          trace.success ? 'auth:success' : 'auth:failure',
-        ],
-        metadata: {
-          activity_type: trace.activityType,
-          key_id: trace.keyId,
-          error: trace.error,
-          ...trace.metadata,
-          subject_org_id: trace.orgId || 'unknown',
-        }
-      })
-    });
-
-    if (!response.ok) {
-      console.error('[Trace] Failed to send authentication trace:', await response.text());
-    } else {
-      console.log('[Trace] Authentication trace sent:', {
-        durationMs: trace.durationMs,
-        success: trace.success,
-        subjectOrgId: trace.orgId,
-        keyId: trace.keyId
-      });
-    }
-  } catch (error) {
-    // Fail silently - don't let trace collection break authentication
-    console.error('[Trace] Error sending trace:', error);
-  }
+function classify(result: { authenticated?: boolean; reason?: string }): AuthOutcomeClass {
+  if (result?.authenticated === true) return 'success';
+  const reason = typeof result?.reason === 'string' ? result.reason : '';
+  if (/revoked/i.test(reason)) return 'revoked';
+  if (/expired/i.test(reason)) return 'expired';
+  return 'invalid';
 }
 
 /**
- * Create a trace wrapper for authentication operations
+ * Run an authentication and count its outcome. The result, or the error, passes through unchanged.
  */
-export function traceAuthentication<T>(
-  operation: () => Promise<T>,
-  metadata?: Partial<AuthenticationTrace>
-): Promise<T> {
-  const startTime = Date.now();
-
-  return operation()
-    .then((result: any) => {
-      const endTime = Date.now();
-
-      // Fire-and-forget: Send trace asynchronously without blocking
-      sendAuthenticationTrace({
-        activityType: 'authentication_resolution',
-        startTime,
-        endTime,
-        durationMs: endTime - startTime,
-        success: result.authenticated === true,
-        orgId: result.orgId,
-        userId: result.userId,
-        keyId: result.keyId,
-        metadata: {
-          signatureValid: result.authenticated,
-          ...metadata?.metadata
-        }
-      }).catch(err => {
-        // Silently log trace errors - never fail authentication due to trace issues
-        console.error('[Trace] Failed to send trace (non-blocking):', err.message);
-      });
-
+export function traceAuthentication<T>(operation: () => Promise<T>): Promise<T> {
+  return operation().then(
+    (result: any) => {
+      counts[classify(result)] += 1;
       return result;
-    })
-    .catch((error) => {
-      const endTime = Date.now();
-
-      // Fire-and-forget: Send failure trace asynchronously
-      sendAuthenticationTrace({
-        activityType: 'authentication_resolution',
-        startTime,
-        endTime,
-        durationMs: endTime - startTime,
-        success: false,
-        error: error.message,
-        ...metadata
-      }).catch(() => {
-        // Ignore trace errors
-      });
-
+    },
+    (error) => {
+      counts.unknown += 1;
       throw error;
-    });
+    },
+  );
 }

@@ -75,6 +75,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { resolveAuthentication } from './resolvers/auth';
+import { authOutcomeCounts } from './services/trace';
 import type { AuthenticationImpulse, AuthenticationResult } from './types';
 import { generateApiKey, generateKeyMetadata } from './services/keyGeneration';
 import { validateKeyFormat, validateKey, parseApiKey } from './services/validation';
@@ -127,7 +128,10 @@ app.get('/health', (c) => {
     version: '0.2.0',
     timestamp: new Date().toISOString(),
     checks: {
-      discovery: { status: 'unknown', registered: false }
+      discovery: { status: 'unknown', registered: false },
+      // Authentication outcomes by reason class since process start (services/trace.ts): integers and a
+      // timestamp only. development-vessel's vessel_health_report carries this body as health_probe.response.
+      auth: authOutcomeCounts(),
     }
   };
 
