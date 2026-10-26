@@ -581,7 +581,14 @@ app.post('/v1/jwt/generate', async (c) => {
     // hold admin (ApiKey admin scope, or an admin/owner-role Bearer). member and
     // viewer roles remain open to any authenticated caller. The operator surface
     // (substrate-key mint_jwt) presents SUBSTRATE_ADMIN_KEY for admin roles.
-    if ((options.role === 'admin' || options.role === 'owner') && !callerIsAdmin) {
+    // owner is not tested here because it cannot reach this line: generateJWTSchema's
+    // role enum is admin | member | viewer, so a request for an owner-role token is
+    // refused by the parse above (JWT_GENERATION_FAILED, 400) for every caller,
+    // admin included. Owner tokens come only from login (resolvers/login.ts), from
+    // the caller's membership row. Admitting owner here would mean widening that
+    // enum, which is a separate decision; this check gates the one elevated role
+    // the schema admits.
+    if (options.role === 'admin' && !callerIsAdmin) {
       return c.json({
         success: false,
         error: {
