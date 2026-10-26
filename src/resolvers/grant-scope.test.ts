@@ -183,7 +183,7 @@ describe('apiKey_write — admin-only scope add, no rotation, every guard in cod
   });
 
   test('admin requested is refused: the allowlist is a frozen constant without admin', async () => {
-    expect(GRANTABLE_SCOPES).toEqual(['tools-exec']);
+    expect(GRANTABLE_SCOPES).toEqual(['tools-exec', 'db:admin', 'templates:admin']);
     expect(Object.isFrozen(GRANTABLE_SCOPES)).toBe(true);
     const admin = await mint(ORG, 'users:sys', ['read', 'write', 'admin']);
     const target = await mint(ORG, 'users:sys', ['read', 'write']);
@@ -193,6 +193,39 @@ describe('apiKey_write — admin-only scope add, no rotation, every guard in cod
       if (!r.ok) { expect(r.status).toBe(403); expect(r.code).toBe('SCOPE_NOT_GRANTABLE'); }
     }
     expect(rowOf(target.keyId).scopes).toEqual(['read', 'write']);
+    expect(updates).toHaveLength(0);
+  });
+
+  test('MUST-FAIL: an admin adds db:admin and templates:admin to an existing [read, write] key, same key, no rotation', async () => {
+    const admin = await mint(ORG, 'users:sys', ['read', 'write', 'admin']);
+    const target = await mint(ORG, 'users:sys', ['read', 'write'], 'substrate-default');
+    const before = snapshot(target.keyId);
+    const r = await grantKeyScopes({ type: 'apiKey_write', key_id: target.keyId, add_scopes: ['db:admin', 'templates:admin'] }, `ApiKey ${admin.key}`);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.added).toEqual(['db:admin', 'templates:admin']);
+      expect(r.scopes).toEqual(['read', 'write', 'db:admin', 'templates:admin']);
+      expect(r.changed).toBe(true);
+    }
+    const after = snapshot(target.keyId);
+    expect(after.scopes).toEqual(['read', 'write', 'db:admin', 'templates:admin']);
+    expect({ ...after, scopes: before.scopes }).toEqual(before);
+    expect((await validateKey(target.key)).scopes).toEqual(['read', 'write', 'db:admin', 'templates:admin']);
+    // The literal admin scope stays out of reach even alongside them.
+    const mixed = await grantKeyScopes({ key_id: target.keyId, add_scopes: ['db:admin', 'admin'] }, `ApiKey ${admin.key}`);
+    expect(mixed.ok).toBe(false);
+    if (!mixed.ok) expect(mixed.code).toBe('SCOPE_NOT_GRANTABLE');
+    expect(rowOf(target.keyId).scopes).not.toContain('admin');
+  });
+
+  test('a non-admin key cannot add db:admin or templates:admin, not even to itself', async () => {
+    const self = await mint(ORG, 'users:sys', ['read', 'write', 'tools-exec']);
+    for (const add of [['db:admin'], ['templates:admin']]) {
+      const r = await grantKeyScopes({ key_id: self.keyId, add_scopes: add }, `ApiKey ${self.key}`);
+      expect(r.ok).toBe(false);
+      if (!r.ok) { expect(r.status).toBe(403); expect(r.code).toBe('FORBIDDEN'); }
+    }
+    expect(rowOf(self.keyId).scopes).toEqual(['read', 'write', 'tools-exec']);
     expect(updates).toHaveLength(0);
   });
 

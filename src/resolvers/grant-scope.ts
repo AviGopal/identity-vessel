@@ -20,8 +20,14 @@
  *   - Admin only: authorizeAdmin (ApiKey with scope admin, or JWT role admin/owner).
  *   - Same org: the row's org_id must be the admin's own org (FORBIDDEN otherwise), and
  *     the UPDATE repeats it in its WHERE clause.
- *   - Allowlist: only GRANTABLE_SCOPES can be added, so this can never grant admin. It is
- *     a frozen constant in this file: only an identity commit can widen it.
+ *   - Allowlist: only GRANTABLE_SCOPES can be added, so this never grants the literal
+ *     admin scope. It is a frozen constant in this file: only an identity commit can widen
+ *     it. db:admin and templates:admin are narrower handler gates on activity-api (the
+ *     admin scope passes both); what a db:admin holder can reach is bounded by
+ *     activity-api's db_admin guards, not by this file, so granting it is an admin decision
+ *     with admin-grade consequences. The caller must already be admin, and an admin can
+ *     already mint a key with any scope set (/v1/keys/issue), so the allowlist adds no
+ *     authority an admin did not have.
  *   - Add only: the pointer carries add_scopes; any field that would set or remove
  *     scopes is refused, and the SQL unions — it never assigns a smaller set.
  *   - No rotation: the UPDATE sets `scopes` and nothing else; key_id, key_hash, prefix
@@ -40,8 +46,14 @@ export const API_KEY_WRITE_SHAPE = 'apiKey_write';
 // What validation answers for a key whose row stores no scopes (validation.ts, /v1/keys/validate).
 const DEFAULT_SCOPES: readonly string[] = Object.freeze(['read', 'write']);
 
-/** The only scopes this write may add. admin is deliberately absent. */
-export const GRANTABLE_SCOPES: readonly string[] = Object.freeze(['tools-exec']);
+/**
+ * The only scopes this write may add. admin is deliberately absent.
+ *   - tools-exec: the daemon tool gate's scope for a key that is not the node's own.
+ *   - db:admin, templates:admin: activity-api's gates on db_admin and /internal/fts-rebuild,
+ *     and on the template retire/promote routes. The fleet key's callers of those routes
+ *     need them on the EXISTING key (no rotation), which only this write can add.
+ */
+export const GRANTABLE_SCOPES: readonly string[] = Object.freeze(['tools-exec', 'db:admin', 'templates:admin']);
 
 type QueryFn = (sql: string, params?: Record<string, any>) => Promise<any>;
 let queryOverride: QueryFn | null = null;
