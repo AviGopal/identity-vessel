@@ -47,7 +47,7 @@ describe('issueApiKey — admin-only key issuance', () => {
   });
 
   test('admin (ApiKey + admin scope) issues a key with custom scopes', async () => {
-    const adminKey = generateApiKey('metabob', 'users:admin', {});
+    const adminKey = generateApiKey('organizations:metabob', 'users:admin', {});
     setValidationQueryFn(async () => [{ scopes: ['admin'] }]);
 
     const captured: { sql: string | null; params: Record<string, any> | null } = {
@@ -85,7 +85,7 @@ describe('issueApiKey — admin-only key issuance', () => {
       {
         iss: 'https://identity.metabob.com',
         sub: 'users:admin',
-        org_id: 'metabob',
+        org_id: 'organizations:metabob',
         user_id: 'users:admin',
         role: 'admin',
         exp: Math.floor(Date.now() / 1000) + 3600,
@@ -103,7 +103,7 @@ describe('issueApiKey — admin-only key issuance', () => {
   });
 
   test('non-admin ApiKey caller gets 403 and no DB write', async () => {
-    const memberKey = generateApiKey('metabob', 'users:member', {});
+    const memberKey = generateApiKey('organizations:metabob', 'users:member', {});
     setValidationQueryFn(async () => [{ scopes: ['read', 'write'] }]);
 
     let dbCalls = 0;
@@ -141,7 +141,7 @@ describe('issueApiKey — admin-only key issuance', () => {
   });
 
   test('generated key authenticates via validateKey() round-trip', async () => {
-    const adminKey = generateApiKey('metabob', 'users:admin', {});
+    const adminKey = generateApiKey('organizations:metabob', 'users:admin', {});
     setValidationQueryFn(async () => [{ scopes: ['admin'] }]);
     setQueryFn(async () => []);
 
@@ -172,7 +172,7 @@ describe('issueApiKey — admin-only key issuance', () => {
   });
 
   test('persisted CREATE carries key_hash, scopes, org_id, user_id, expires_at', async () => {
-    const adminKey = generateApiKey('metabob', 'users:admin', {});
+    const adminKey = generateApiKey('organizations:metabob', 'users:admin', {});
     setValidationQueryFn(async () => [{ scopes: ['admin'] }]);
 
     let captured: { sql: string; params: Record<string, any> } | null = null;
@@ -211,15 +211,45 @@ describe('issueApiKey — admin-only key issuance', () => {
     expect(cap.sql).toContain('created_at = time::now()');
   });
 
-  test('missing user_id or org_id → 400 INVALID_INPUT', async () => {
-    const adminKey = generateApiKey('metabob', 'users:admin', {});
+  test('missing user_id or org_id defaults to the caller; an empty one is still 400 INVALID_INPUT', async () => {
+    const adminKey = generateApiKey('organizations:metabob', 'users:admin', {});
     setValidationQueryFn(async () => [{ scopes: ['admin'] }]);
+    const writes: Record<string, any>[] = [];
+    setQueryFn(async (_sql, params) => {
+      writes.push(params ?? {});
+      return [];
+    });
     const auth = `ApiKey ${adminKey.key}`;
     const noUser = await issueApiKey({ org_id: 'organizations:metabob' }, auth);
     const noOrg = await issueApiKey({ user_id: 'users:bob' }, auth);
-    expect(noUser.ok).toBe(false);
-    expect(noOrg.ok).toBe(false);
-    if (!noUser.ok) expect(noUser.code).toBe('INVALID_INPUT');
-    if (!noOrg.ok) expect(noOrg.code).toBe('INVALID_INPUT');
+    expect(noUser.ok).toBe(true);
+    expect(noOrg.ok).toBe(true);
+    expect(writes.map((w) => [w.org_id, w.user_id])).toEqual([
+      ['organizations:metabob', 'users:admin'],
+      ['organizations:metabob', 'users:bob'],
+    ]);
+    const emptyUser = await issueApiKey({ org_id: 'organizations:metabob', user_id: '' }, auth);
+    expect(emptyUser.ok).toBe(false);
+    if (!emptyUser.ok) expect(emptyUser.code).toBe('INVALID_INPUT');
+  });
+
+  test('a target org other than the caller\'s → 403 FORBIDDEN and no DB write', async () => {
+    const adminKey = generateApiKey('organizations:metabob', 'users:admin', {});
+    setValidationQueryFn(async () => [{ scopes: ['admin'] }]);
+    let dbCalls = 0;
+    setQueryFn(async () => {
+      dbCalls++;
+      return [];
+    });
+    const result = await issueApiKey(
+      { user_id: 'users:admin', org_id: 'organizations:other' },
+      `ApiKey ${adminKey.key}`,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(403);
+      expect(result.code).toBe('FORBIDDEN');
+    }
+    expect(dbCalls).toBe(0);
   });
 });

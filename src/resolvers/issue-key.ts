@@ -71,9 +71,22 @@ function fail(status: number, code: FailureCode, message: string): IssueKeyFailu
   return { ok: false, status, code, message };
 }
 
+/**
+ * The authenticated admin caller. `is_admin` is always true when ok: authorizeAdmin
+ * admits only an ApiKey with scope admin or a Bearer with role admin/owner (the same
+ * entitlement /v1/jwt/generate calls callerIsAdmin). It is carried explicitly so the
+ * key-target binding below states its rule rather than inferring it from the call site.
+ */
+export interface AdminAuthz {
+  ok: true;
+  org_id?: string;
+  user_id?: string;
+  is_admin: true;
+}
+
 export async function authorizeAdmin(
   authHeader: string | undefined,
-): Promise<{ ok: true; org_id?: string; user_id?: string } | IssueKeyFailure> {
+): Promise<AdminAuthz | IssueKeyFailure> {
   if (!authHeader) return fail(401, 'MISSING_AUTH_HEADER', 'Missing Authorization header');
 
   if (authHeader.startsWith('ApiKey ')) {
@@ -87,7 +100,7 @@ export async function authorizeAdmin(
       return fail(403, 'FORBIDDEN', 'API key does not have admin scope');
     }
     // The admin's own org and user, for a caller that scopes its write to them (grant-scope.ts).
-    return { ok: true, org_id: validation.orgId, user_id: validation.userId };
+    return { ok: true, org_id: validation.orgId, user_id: validation.userId, is_admin: true };
   }
 
   if (authHeader.startsWith('Bearer ')) {
@@ -106,10 +119,56 @@ export async function authorizeAdmin(
     if (payload?.typ === 'obo') return fail(403, 'FORBIDDEN', 'An on-behalf-of token cannot authorize administration');
     const role = (payload?.role as string | undefined) ?? '';
     if (role !== 'admin' && role !== 'owner') return fail(403, 'FORBIDDEN', 'JWT role is not admin');
-    return { ok: true, org_id: payload?.org_id, user_id: payload?.user_id ?? payload?.sub };
+    return { ok: true, org_id: payload?.org_id, user_id: payload?.user_id ?? payload?.sub, is_admin: true };
   }
 
   return fail(401, 'INVALID_AUTH_SCHEME', 'Authorization must start with "ApiKey " or "Bearer "');
+}
+
+/**
+ * Bind a key request's target (org_id, user_id) to the authenticated caller,
+ * following the rule /v1/jwt/generate applies to the claims it mints, with the
+ * same FORBIDDEN shape.
+ *
+ *   - A missing org_id defaults to the caller's org, and a missing user_id to the
+ *     caller's user. Never to anything else.
+ *   - org_id must equal the caller's org; otherwise 403.
+ *   - user_id may differ from the caller's only when the target org is the caller's
+ *     own AND the caller is admin (an ApiKey with scope admin, or a Bearer with role
+ *     admin/owner): a same-org admin issuing for a member. Otherwise 403. Membership
+ *     of that user is not checked here (identity holds no membership table); the
+ *     minted key is bound to the caller's org either way, which is what tenant
+ *     isolation (PERMISSIONS on $token.org_id) keys on.
+ *
+ * Shared by /v1/keys/issue (issueApiKey) and /v1/keys/generate (index.ts).
+ * Returns the body with org_id/user_id resolved, or a 403 failure. A non-object
+ * body is passed through untouched so each route's own input validation answers it.
+ */
+export function bindKeyTarget(
+  body: unknown,
+  authz: AdminAuthz,
+): unknown {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+  if (!authz.org_id) return fail(403, 'FORBIDDEN', 'The admin credential names no org');
+  const b = body as Record<string, unknown>;
+  const missing = (v: unknown) => v === undefined || v === null;
+
+  const org_id = missing(b.org_id) ? authz.org_id : b.org_id;
+  if (org_id !== authz.org_id) {
+    return fail(403, 'FORBIDDEN', 'Key org_id must match the authenticated credential');
+  }
+
+  const user_id = missing(b.user_id) ? authz.user_id : b.user_id;
+  if (user_id !== authz.user_id && !(org_id === authz.org_id && authz.is_admin === true)) {
+    return fail(403, 'FORBIDDEN', 'Issuing a key for another user requires admin entitlement in the same org');
+  }
+
+  return { ...b, org_id, user_id };
+}
+
+/** True when bindKeyTarget refused the request. */
+export function isIssueKeyFailure(v: unknown): v is IssueKeyFailure {
+  return !!v && typeof v === 'object' && (v as any).ok === false && 'status' in (v as any);
 }
 
 function validateInput(body: unknown): IssueKeyRequest | IssueKeyFailure {
@@ -150,7 +209,7 @@ function validateInput(body: unknown): IssueKeyRequest | IssueKeyFailure {
   };
 }
 
-/** Issue a new API key. Admin-only. */
+/** Issue a new API key. Admin-only; the key's org (and, for a non-admin, user) is the caller's own. */
 export async function issueApiKey(
   body: unknown,
   authHeader: string | undefined,
@@ -158,7 +217,10 @@ export async function issueApiKey(
   const authz = await authorizeAdmin(authHeader);
   if ('status' in authz) return authz;
 
-  return mintApiKey(body);
+  const bound = bindKeyTarget(body, authz);
+  if (isIssueKeyFailure(bound)) return bound;
+
+  return mintApiKey(bound);
 }
 
 /**

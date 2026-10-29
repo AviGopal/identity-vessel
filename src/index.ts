@@ -81,7 +81,7 @@ import { generateApiKey, generateKeyMetadata } from './services/keyGeneration';
 import { validateKeyFormat, validateKey, parseApiKey } from './services/validation';
 import { revokeKey, isKeyRevoked } from './db/redis';
 import { config } from './services/config';
-import { issueApiKey, authorizeAdmin } from './resolvers/issue-key';
+import { issueApiKey, authorizeAdmin, bindKeyTarget, isIssueKeyFailure } from './resolvers/issue-key';
 import { grantKeyScopes, API_KEY_WRITE_SHAPE } from './resolvers/grant-scope';
 import { bootstrapAdminKey } from './resolvers/bootstrap-admin';
 import { loginWithPassword, signupWithPassword } from './resolvers/login';
@@ -985,8 +985,13 @@ app.post('/v1/keys/generate', async (c) => {
     if ('status' in authz) {
       return c.json({ success: false, error: { code: authz.code, message: authz.message } }, authz.status as any);
     }
-    const body = await c.req.json();
-    const { org_id, user_id, name, scopes, expires_in_days } = generateKeySchema.parse(body);
+    // The key's target is bound to the caller (bindKeyTarget, shared with /v1/keys/issue):
+    // org_id must be the caller's own, a missing org_id/user_id defaults to the caller's.
+    const bound = bindKeyTarget(await c.req.json(), authz);
+    if (isIssueKeyFailure(bound)) {
+      return c.json({ success: false, error: { code: bound.code, message: bound.message } }, bound.status as any);
+    }
+    const { org_id, user_id, name, scopes, expires_in_days } = generateKeySchema.parse(bound);
 
     // Generate the API key
     const keyResult = generateApiKey(org_id, user_id, {
