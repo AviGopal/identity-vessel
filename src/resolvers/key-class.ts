@@ -10,10 +10,11 @@
  *     characters, so this is a prefix, never the whole id). A reader matches a principal's key
  *     id by prefix. A row with no key_id string, or one shorter than 13 characters (whose mask
  *     would be the whole id), is not listed: unlisted reads as unattributable, never as system.
- *   - owner_kind: 'system' | 'operator' | 'unclassified' (OWNER_KINDS also admits 'peer', which
- *     the reader recognises and no derivation here produces).
+ *   - owner_kind: 'system' | 'operator' | 'peer' | 'unclassified'. 'peer' is stamped only when
+ *     the issuer declares it at issue with the joining node's name; no derivation produces it.
  *   - owner_node: the node name (SUBSTRATE_NAME) for a system key, which this identity issued
- *     to this node's services; null for every other key, and null when the name is unset.
+ *     to this node's services, and null when that name is unset; for a peer key, the node name
+ *     declared at issue (null if the row holds none); null for every other key.
  *   - is_admin: the key's stored scopes include the literal 'admin' scope.
  *
  * Authorization: a service ApiKey, checked the way authorizeAdmin checks one (validateKey,
@@ -79,6 +80,11 @@ function nodeName(): string | null {
   return n.length > 0 ? n : null;
 }
 
+/** The node a peer key was declared for at issue, or null when the row holds none. */
+function peerNode(v: unknown): string | null {
+  return typeof v === 'string' && v.length > 0 ? v : null;
+}
+
 /** One served entry from a stored row, or null when the row cannot be listed. Exported for tests. */
 export function entryFromRow(row: Record<string, unknown>, node: string | null): KeyClassEntry | null {
   const id = row.key_id;
@@ -88,7 +94,7 @@ export function entryFromRow(row: Record<string, unknown>, node: string | null):
   return {
     key_id_mask12: id.slice(0, 12),
     owner_kind,
-    owner_node: owner_kind === 'system' ? node : null,
+    owner_node: owner_kind === 'system' ? node : owner_kind === 'peer' ? peerNode(row.owner_node) : null,
     is_admin: scopes.includes('admin'),
   };
 }
@@ -113,7 +119,7 @@ export async function readKeyClass(authHeader: string | undefined): Promise<KeyC
   try {
     const query = await getQueryFn();
     // Never key_hash: the read selects only what the class is derived from.
-    rows = await query('SELECT key_id, name, scopes, owner_kind FROM api_key WHERE org_id = $org_id;', { org_id: validation.orgId });
+    rows = await query('SELECT key_id, name, scopes, owner_kind, owner_node FROM api_key WHERE org_id = $org_id;', { org_id: validation.orgId });
   } catch {
     return fail(500, 'READ_FAILED', 'Could not read the key class map');
   }
@@ -124,6 +130,6 @@ export async function readKeyClass(authHeader: string | undefined): Promise<KeyC
     .filter((e): e is KeyClassEntry => e !== null);
   const count = (k: OwnerKind) => keys.filter((e) => e.owner_kind === k).length;
   // Counts only: no key id, mask or name.
-  console.log(`[apiKeyClass] served ${keys.length} key(s): system=${count('system')} operator=${count('operator')} unclassified=${count('unclassified')}`);
+  console.log(`[apiKeyClass] served ${keys.length} key(s): system=${count('system')} operator=${count('operator')} peer=${count('peer')} unclassified=${count('unclassified')}`);
   return { ok: true, keys };
 }

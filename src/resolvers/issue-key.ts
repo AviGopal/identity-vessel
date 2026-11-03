@@ -16,7 +16,7 @@ import { isKeyRevoked } from '../db/redis';
 import { verify as verifyJwt } from 'hono/jwt';
 import { safeJwtErrorMessage } from '../services/redact';
 import { createHash } from 'crypto';
-import { ownerKindAtIssue, type OwnerKind } from '../services/owner-kind';
+import { ownerKindAtIssue, isNodeName, type OwnerKind } from '../services/owner-kind';
 
 type QueryFn = (sql: string, params?: Record<string, any>) => Promise<any>;
 let queryOverride: QueryFn | null = null;
@@ -40,9 +40,12 @@ export interface IssueKeyRequest {
   scopes?: string[];      // default ["read","write"]
   expires_in_days?: number;
   name?: string;
-  // The key's class (services/owner-kind.ts). Only 'operator' may be declared; absent, the
-  // class is derived from name. Stamped on the row as owner_kind.
-  owner_kind?: 'operator';
+  // The key's class (services/owner-kind.ts). Only 'operator' or 'peer' may be declared;
+  // absent, the class is derived from name. Stamped on the row as owner_kind.
+  owner_kind?: 'operator' | 'peer';
+  // The joining node's name: required with owner_kind 'peer' and accepted only with it.
+  // Stamped on the row as owner_node, which apiKeyClass serves for the key.
+  owner_node?: string;
 }
 
 export interface IssueKeySuccess {
@@ -205,7 +208,14 @@ function validateInput(body: unknown): IssueKeyRequest | IssueKeyFailure {
   }
 
   if (ownerKindAtIssue(b.name, b.owner_kind) === null) {
-    return fail(400, 'INVALID_INPUT', "owner_kind may only be declared 'operator'");
+    return fail(400, 'INVALID_INPUT', "owner_kind may only be declared 'operator' or 'peer'");
+  }
+  const peer = b.owner_kind === 'peer';
+  if (peer && !isNodeName(b.owner_node)) {
+    return fail(400, 'INVALID_INPUT', "owner_kind 'peer' needs owner_node, the joining node's name");
+  }
+  if (!peer && b.owner_node !== undefined && b.owner_node !== null) {
+    return fail(400, 'INVALID_INPUT', "owner_node may only be declared with owner_kind 'peer'");
   }
 
   return {
@@ -214,7 +224,8 @@ function validateInput(body: unknown): IssueKeyRequest | IssueKeyFailure {
     scopes,
     expires_in_days,
     name: typeof b.name === 'string' ? b.name : undefined,
-    owner_kind: b.owner_kind === 'operator' ? 'operator' : undefined,
+    owner_kind: b.owner_kind === 'operator' || peer ? b.owner_kind as 'operator' | 'peer' : undefined,
+    owner_node: peer ? b.owner_node as string : undefined,
   };
 }
 
@@ -281,6 +292,8 @@ export async function mintApiKey(body: unknown): Promise<IssueKeyResult> {
         created_at = time::now(),
         is_active = true,
         owner_kind = $owner_kind${
+          validated.owner_node ? ',\n        owner_node = $owner_node' : ''
+        }${
           validated.name ? ',\n        name = $name' : ''
         }${
           generated.expiresAt ? ',\n        expires_at = <datetime>$expires_at' : ''
@@ -294,6 +307,7 @@ export async function mintApiKey(body: unknown): Promise<IssueKeyResult> {
     prefix: generated.key.split('-').slice(0, 2).join('-'),
     owner_kind: ownerKind,
   };
+  if (validated.owner_node) params.owner_node = validated.owner_node;
   if (validated.name) params.name = validated.name;
   if (generated.expiresAt) params.expires_at = generated.expiresAt;
 

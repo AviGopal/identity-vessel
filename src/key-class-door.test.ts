@@ -26,6 +26,7 @@ const ROWS = [
   { key_id: 'key_FIXTUREadm000000B', key_hash: 'e'.repeat(64), name: 'substrate-admin', scopes: ['read', 'write', 'admin'], prefix: 'mb-fixture', user_id: 'users:fixture', org_id: ORG },
   { key_id: 'key_FIXTUREfree00000C', key_hash: 'd'.repeat(64), name: 'fixture-free-form-name', scopes: ['read'], prefix: 'mb-fixture', user_id: 'users:fixture', org_id: ORG },
   { key_id: 'key_FIXTUREop0000000D', key_hash: 'c'.repeat(64), name: 'fixture-person-key', scopes: ['read'], owner_kind: 'operator', prefix: 'mb-fixture', user_id: 'users:fixture', org_id: ORG },
+  { key_id: 'key_FIXTUREpeer0000E', key_hash: 'a'.repeat(64), name: 'fixture-join-key', scopes: ['read', 'write'], owner_kind: 'peer', owner_node: 'node-a', prefix: 'mb-fixture', user_id: 'users:fixture', org_id: ORG },
   { key_hash: 'b'.repeat(64), name: 'concept-db', scopes: ['read'], org_id: ORG },
 ];
 
@@ -114,6 +115,7 @@ describe('apiKeyClass on the resolve door', () => {
       { key_id_mask12: 'key_FIXTUREa', owner_kind: 'unclassified', owner_node: null, is_admin: true },
       { key_id_mask12: 'key_FIXTUREf', owner_kind: 'unclassified', owner_node: null, is_admin: false },
       { key_id_mask12: 'key_FIXTUREo', owner_kind: 'operator', owner_node: null, is_admin: false },
+      { key_id_mask12: 'key_FIXTUREp', owner_kind: 'peer', owner_node: 'node-a', is_admin: false },
     ]);
     for (const k of keys) {
       expect(Object.keys(k).sort()).toEqual(['is_admin', 'key_id_mask12', 'owner_kind', 'owner_node']);

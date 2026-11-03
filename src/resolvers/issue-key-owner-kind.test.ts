@@ -2,7 +2,7 @@
  * A key is stamped with its class (owner_kind) at issue, by the one rule the backfill and the
  * apiKeyClass resolver use (services/owner-kind.ts): a vessel service key the seeder names is
  * 'system', a key declared 'operator' at issue 'operator', any other name (the admin
- * credential's included) 'unclassified'. An issuer may declare 'operator' and nothing else.
+ * credential's included) 'unclassified'. An issuer may declare 'operator' or 'peer' and nothing else.
  *
  * MUST-FAIL on a tree without the stamp: the CREATE carries no owner_kind.
  * The database is a stub that captures the CREATE; no key leaves this process.
@@ -77,8 +77,8 @@ describe('owner_kind is stamped at issue', () => {
     expect((await mint({})).params?.owner_kind).toBe('unclassified');
   });
 
-  test("declaring any class but 'operator' is refused, and nothing is written", async () => {
-    for (const owner_kind of ['system', 'peer', 'unclassified', 'SYSTEM', 7]) {
+  test("declaring any class but 'operator' or 'peer' is refused, and nothing is written", async () => {
+    for (const owner_kind of ['system', 'unclassified', 'SYSTEM', 'Peer', 7]) {
       const { result, sql } = await mint({ name: 'goal-host-vessel', owner_kind });
       expect(result.ok).toBe(false);
       expect(result.status).toBe(400);

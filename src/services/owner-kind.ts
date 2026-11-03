@@ -54,13 +54,23 @@ export function deriveOwnerKind(name: unknown): OwnerKind {
 
 /**
  * The class stamped on a key at issue. An issuer may declare 'operator' (a key for a person
- * or an operator session), which wins over the name; it may not declare any other class, so
- * a declaration can only make a key's writes read as an operator's, never as the system's.
- * Returns null for a declaration that is not 'operator' (the caller refuses the request).
+ * or an operator session) or 'peer' (a joining node's key, issued with that node's name as
+ * owner_node), and the declaration wins over the name; it may not declare any other class, so
+ * a declaration can never make a key's writes read as the system's. 'peer', like 'operator',
+ * is never derived from a name. Returns null for any other declaration (the caller refuses
+ * the request).
  */
 export function ownerKindAtIssue(name: unknown, declared: unknown): OwnerKind | null {
   if (declared === undefined || declared === null) return deriveOwnerKind(name);
-  return declared === 'operator' ? 'operator' : null;
+  return declared === 'operator' || declared === 'peer' ? declared : null;
+}
+
+/**
+ * A node name a 'peer' declaration may carry as owner_node: 1 to 63 characters of letters,
+ * digits, '.', '_' and '-', starting with a letter or digit.
+ */
+export function isNodeName(v: unknown): v is string {
+  return typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/.test(v);
 }
 
 /** A stored owner_kind when it is one of OWNER_KINDS, else the derivation from the name. */

@@ -38,11 +38,12 @@ describe('deriveOwnerKind: the documented name patterns', () => {
       expect(deriveOwnerKind(n)).toBe('unclassified');
     }
   });
-  test("an issuer may declare only 'operator'", () => {
+  test("an issuer may declare only 'operator' or 'peer'", () => {
     expect(ownerKindAtIssue('goal-host-vessel', undefined)).toBe('system');
     expect(ownerKindAtIssue('goal-host-vessel', 'operator')).toBe('operator');
+    expect(ownerKindAtIssue('fixture-name', 'peer')).toBe('peer');
     expect(ownerKindAtIssue('fixture-name', 'system')).toBeNull();
-    expect(ownerKindAtIssue('fixture-name', 'peer')).toBeNull();
+    expect(ownerKindAtIssue('fixture-name', 'unclassified')).toBeNull();
   });
   test('a stored class is kept; a missing or unknown one is derived', () => {
     expect(storedOrDerived('operator', 'goal-host-vessel')).toBe('operator');
