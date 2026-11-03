@@ -24,6 +24,7 @@
 
 import { readdir } from 'fs/promises';
 import { join } from 'path';
+import { backfillOwnerKind } from '../services/owner-kind';
 
 /** Runs SurrealQL and resolves with every statement's result; rejects when any statement fails. */
 export type RunSql = (sql: string, params?: Record<string, unknown>) => Promise<unknown[]>;
@@ -158,5 +159,22 @@ export async function migrateOnStart(
   const deadlineMs = opts.deadlineMs ?? START_DEADLINE_MS;
   const until = Date.now() + deadlineMs;
   const run = await within(connect(), deadlineMs, 'connecting to the datastore');
-  return applyMigrations(run, opts.dir, { until });
+  const report = await applyMigrations(run, opts.dir, { until });
+  await stampOwnerKinds(run, until);
+  return report;
+}
+
+/**
+ * Backfill api_key.owner_kind (migration 005) on the rows that have none, after the files
+ * apply. It never fails the start: a row it cannot stamp, or a step that runs out of the
+ * deadline, leaves rows unstamped, and the apiKeyClass resolver answers those by the same
+ * rule (services/owner-kind.ts deriveOwnerKind). Logs counts only, never a key id.
+ */
+export async function stampOwnerKinds(run: RunSql, until: number): Promise<void> {
+  try {
+    const r = await within(backfillOwnerKind(run), until - Date.now(), 'stamping api_key owner_kind');
+    console.log('[Schema] api_key owner_kind stamped', r);
+  } catch (err) {
+    console.error('[Schema] api_key owner_kind not stamped; unstamped rows are answered by the derivation', { err: message(err) });
+  }
 }

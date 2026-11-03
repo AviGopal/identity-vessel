@@ -16,6 +16,7 @@ import { isKeyRevoked } from '../db/redis';
 import { verify as verifyJwt } from 'hono/jwt';
 import { safeJwtErrorMessage } from '../services/redact';
 import { createHash } from 'crypto';
+import { ownerKindAtIssue, type OwnerKind } from '../services/owner-kind';
 
 type QueryFn = (sql: string, params?: Record<string, any>) => Promise<any>;
 let queryOverride: QueryFn | null = null;
@@ -39,6 +40,9 @@ export interface IssueKeyRequest {
   scopes?: string[];      // default ["read","write"]
   expires_in_days?: number;
   name?: string;
+  // The key's class (services/owner-kind.ts). Only 'operator' may be declared; absent, the
+  // class is derived from name. Stamped on the row as owner_kind.
+  owner_kind?: 'operator';
 }
 
 export interface IssueKeySuccess {
@@ -200,12 +204,17 @@ function validateInput(body: unknown): IssueKeyRequest | IssueKeyFailure {
     expires_in_days = b.expires_in_days;
   }
 
+  if (ownerKindAtIssue(b.name, b.owner_kind) === null) {
+    return fail(400, 'INVALID_INPUT', "owner_kind may only be declared 'operator'");
+  }
+
   return {
     user_id: b.user_id,
     org_id: b.org_id,
     scopes,
     expires_in_days,
     name: typeof b.name === 'string' ? b.name : undefined,
+    owner_kind: b.owner_kind === 'operator' ? 'operator' : undefined,
   };
 }
 
@@ -248,6 +257,8 @@ export async function mintApiKey(body: unknown): Promise<IssueKeyResult> {
   });
 
   const keyHash = createHash('sha256').update(generated.key).digest('hex');
+  // validateInput refused every declaration ownerKindAtIssue does not admit.
+  const ownerKind = ownerKindAtIssue(validated.name, validated.owner_kind) as OwnerKind;
 
   // SurrealDB 3.x renamed `type::thing` → `type::record`; we avoid the helper
   // entirely and use the auto-generated id, persisting the HMAC-embedded keyId
@@ -268,7 +279,8 @@ export async function mintApiKey(body: unknown): Promise<IssueKeyResult> {
         scopes = $scopes,
         prefix = $prefix,
         created_at = time::now(),
-        is_active = true${
+        is_active = true,
+        owner_kind = $owner_kind${
           validated.name ? ',\n        name = $name' : ''
         }${
           generated.expiresAt ? ',\n        expires_at = <datetime>$expires_at' : ''
@@ -280,6 +292,7 @@ export async function mintApiKey(body: unknown): Promise<IssueKeyResult> {
     user_id: validated.user_id,
     scopes,
     prefix: generated.key.split('-').slice(0, 2).join('-'),
+    owner_kind: ownerKind,
   };
   if (validated.name) params.name = validated.name;
   if (generated.expiresAt) params.expires_at = generated.expiresAt;

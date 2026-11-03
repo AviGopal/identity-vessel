@@ -116,9 +116,11 @@ export function loadConfig(): IdentityVesselConfig {
       // 'authentication' (read): the two credential forms (apiKey, session) are
       // pointer.type values, not shapes — see shape-dispatch.config.json.
       // 'apiKey_write' (admin-only scope add, no rotation): resolvers/grant-scope.ts.
+      // 'apiKeyClass' (service-key read of each key's class by masked id): resolvers/key-class.ts.
       shapes: [
         'authentication',
         'apiKey_write',
+        'apiKeyClass',
       ],
     },
 

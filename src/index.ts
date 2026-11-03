@@ -64,6 +64,10 @@
  *   Header: Authorization: ApiKey <admin key> | Bearer <admin JWT>
  *   Body:   { impulse: { pointer: { type: 'apiKey_write', key_id, add_scopes[] } } }
  *   Response: { success, data: { key_id, scopes[], added[], changed } }
+ *   Also the door for the apiKeyClass impulse (service-key read, resolvers/key-class.ts):
+ *   Header: Authorization: ApiKey <service key>   (a Bearer token is refused)
+ *   Body:   { impulse: { pointer: { type: 'apiKeyClass' } } }
+ *   Response: { success, data: { keys: [{ key_id_mask12, owner_kind, owner_node, is_admin }] } }
  * - POST /v1/auth/on-behalf-of - Federation ingress: caller validation + node/shape-bound token
  * - POST /v1/auth/minibob/signin - DEPRECATED (returns 410)
  * - POST /v2/auth/minibob/signin - DEPRECATED (returns 410)
@@ -83,6 +87,7 @@ import { revokeKey, isKeyRevoked } from './db/redis';
 import { config } from './services/config';
 import { issueApiKey, authorizeAdmin, bindKeyTarget, isIssueKeyFailure } from './resolvers/issue-key';
 import { grantKeyScopes, API_KEY_WRITE_SHAPE } from './resolvers/grant-scope';
+import { readKeyClass, API_KEY_CLASS_SHAPE } from './resolvers/key-class';
 import { bootstrapAdminKey } from './resolvers/bootstrap-admin';
 import { loginWithPassword, signupWithPassword } from './resolvers/login';
 import { z } from 'zod';
@@ -177,6 +182,12 @@ app.get('/capabilities', (c) => {
         description: 'Admin-only: adds an allowlisted scope to an existing key, same key_id and secret (no rotation)',
         avgLatency: 5,
         cost: 0.0001
+      },
+      {
+        type: 'apiKeyClass',
+        description: "Service-key read: each of the caller org's keys by a 12-character id mask, with its owner_kind, owner_node and is_admin",
+        avgLatency: 5,
+        cost: 0.0001
       }
     ],
     endpoints: [
@@ -196,7 +207,7 @@ app.get('/capabilities', (c) => {
       'POST /v1/keys/validate - Validate API key (format, signature, revocation)',
       'POST /v1/keys/revoke - Revoke an API key',
       // Authentication Resolution
-      'POST /v1/auth/resolve - Resolve authentication impulse (JWT or API key), or an apiKey_write impulse (admin-only scope add)',
+      'POST /v1/auth/resolve - Resolve authentication impulse (JWT or API key), an apiKey_write impulse (admin-only scope add), or an apiKeyClass impulse (service-key read)',
       'POST /v1/auth/on-behalf-of - Federation ingress: validate a caller and mint a node+shape-bound token',
       'POST /v1/auth/minibob/signin - DEPRECATED (returns 410)',
       'POST /v2/auth/minibob/signin - DEPRECATED (returns 410)'
@@ -283,6 +294,17 @@ app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 100, buck
         success: true,
         data: { key_id: granted.key_id, scopes: granted.scopes, added: granted.added, changed: granted.changed },
       });
+    }
+
+    // Branch 0b: the apiKeyClass impulse — a read of each key's class by masked id, for a
+    // service ApiKey caller only. The pointer carries nothing else. See resolvers/key-class.ts.
+    if (body?.impulse?.pointer?.type === API_KEY_CLASS_SHAPE
+        && (body.impulse.type === undefined || body.impulse.type === API_KEY_CLASS_SHAPE)) {
+      const read = await readKeyClass(c.req.header('Authorization'));
+      if (!read.ok) {
+        return c.json({ success: false, error: { code: read.code, message: read.message } }, read.status as any);
+      }
+      return c.json({ success: true, data: { keys: read.keys } });
     }
 
     // Branch 1: nested impulse form — body has an `impulse` field.
