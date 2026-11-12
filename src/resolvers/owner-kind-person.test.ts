@@ -34,15 +34,17 @@ async function mint(scopes: string[], name: string): Promise<{ key: string; keyI
   const r = await mintApiKey({ org_id: ORG, user_id: 'users:sys', scopes, name });
   setIssueQueryFn(null);
   if (!r.ok || !created) throw new Error('mint failed');
-  store.push({ ...(created as Record<string, any>), is_active: true });
+  store.push({ id: `api_key:rec${++recs}`, ...(created as Record<string, any>), is_active: true });
   return { key: r.key, keyId: r.key_id };
 }
 // A row is found by its id as validation finds it: in key_id, or in key_prefix on a row written before key_id was stored.
-const byId = (r: Record<string, any>, id: unknown) => r.key_id === id || r.key_prefix === id;
-// The database matches what the SQL says: key_prefix only when the query names it.
+// The database finds what the SQL names: key_id; the record id when the query names record::id(id);
+// key_prefix only when the query names it.
 const asQueried = (sql: string) => (r: Record<string, any>, id: unknown) =>
-  r.key_id === id || (sql.includes('key_prefix = $key_id') && r.key_prefix === id);
-const rowOf = (keyId: string) => store.find((r) => byId(r, keyId))!;
+  r.key_id === id || (sql.includes('record::id(id) = $key_id') && r.id === `api_key:${String(id)}`)
+  || (sql.includes('key_prefix = $key_id') && r.key_prefix === id);
+const rowOf = (keyId: string) => store.find((r) => r.key_id === keyId || r.id === `api_key:${keyId}`)!;
+let recs = 0;
 
 beforeEach(() => {
   store = [];
@@ -55,10 +57,13 @@ beforeEach(() => {
     const match = asQueried(sql);
     if (sql.startsWith('SELECT')) {
       const r = store.find((x) => match(x, params?.key_id));
-      return r ? [{ key_id: r.key_id, org_id: r.org_id, scopes: [...r.scopes], owner_kind: r.owner_kind }] : [];
+      return r ? [{ id: r.id, key_id: r.key_id, org_id: r.org_id, scopes: [...r.scopes], owner_kind: r.owner_kind }] : [];
     }
     updates.push({ sql, params: params ?? {} });
-    const hits = store.filter((r) => match(r, params?.key_id) && r.org_id === params?.org_id);
+    // a write names its record ($rid), or (the parent's form) every row its WHERE matches
+    const hits = sql.startsWith('UPDATE $rid')
+      ? store.filter((r) => r.id === params?.rid && r.org_id === params?.org_id)
+      : store.filter((r) => match(r, params?.key_id) && r.org_id === params?.org_id);
     if (sql.includes('SET owner_kind')) {
       for (const r of hits) r.owner_kind = params?.owner_kind;
       return hits.map((r) => ({ key_id: r.key_id, owner_kind: r.owner_kind }));
@@ -79,7 +84,9 @@ describe('a person key', () => {
     expect(r).toMatchObject({ ok: true, owner_kind: 'person', changed: true, added: [] });
     expect(updates).toHaveLength(1);
     expect(updates[0].sql.split(/\bSET\b/)[1].split(/\bWHERE\b/)[0].trim()).toBe('owner_kind = $owner_kind');
-    expect(updates[0].sql).toContain('WHERE (key_id = $key_id OR key_prefix = $key_id) AND org_id = $org_id');
+    expect(updates[0].sql).toStartWith('UPDATE $rid SET');
+    expect(updates[0].sql).toContain('WHERE org_id = $org_id');
+    expect(updates[0].params.rid).toBe(before.id);
     expect({ ...rowOf(target.keyId), owner_kind: undefined }).toEqual({ ...before, owner_kind: undefined });
     expect((await validateKey(target.key)).ownerKind).toBe('person');
     // marking it again writes nothing
@@ -88,17 +95,25 @@ describe('a person key', () => {
     expect(updates).toHaveLength(1);
   });
 
-  test('MUST-FAIL: a key whose id its row holds as key_prefix (written before key_id was stored) is found and marked', async () => {
+  test('MUST-FAIL: an old-format key (no key_id; its id in its record id, its key_prefix the key itself) is found by id and marked', async () => {
     const admin = await mint(['read', 'write', 'admin'], 'substrate-admin');
-    const old = await mint(['read', 'write'], 'a-dashboard-key');
-    const row = rowOf(old.keyId);
-    row.key_prefix = row.key_id;
-    delete row.key_id;
-    expect((await validateKey(old.key)).valid).toBe(true); // it authenticates
-    const r = await grantKeyScopes({ type: 'apiKey_write', key_id: old.keyId, owner_kind: 'person' }, `ApiKey ${admin.key}`);
+    const id = 'key__legacyFixture01';
+    store.push({ id: `api_key:${id}`, org_id: ORG, user_id: 'users:sys', scopes: ['read', 'write'], name: 'a-surface-key', key_prefix: 'mb_the_key_itself_never_matched', is_active: true });
+    const r = await grantKeyScopes({ type: 'apiKey_write', key_id: id, owner_kind: 'person' }, `ApiKey ${admin.key}`);
     expect(r).toMatchObject({ ok: true, owner_kind: 'person', changed: true });
-    expect(rowOf(old.keyId).owner_kind).toBe('person');
-    expect((await validateKey(old.key)).ownerKind).toBe('person');
+    expect(rowOf(id).owner_kind).toBe('person');
+    expect(updates).toHaveLength(1);
+    expect(updates[0].params.rid).toBe(`api_key:${id}`);
+    expect(JSON.stringify(r)).not.toContain('mb_the_key_itself'); // the key itself is never echoed
+  });
+
+  test('MUST-FAIL: a value many rows hold as key_prefix finds no key, and marks none of them', async () => {
+    const admin = await mint(['read', 'write', 'admin'], 'substrate-admin');
+    for (const n of [1, 2]) store.push({ id: `api_key:dup${n}`, org_id: ORG, user_id: 'users:sys', scopes: ['read', 'write'], key_prefix: 'dup', is_active: true });
+    const r = await grantKeyScopes({ type: 'apiKey_write', key_id: 'dup', owner_kind: 'person' }, `ApiKey ${admin.key}`);
+    expect(r).toMatchObject({ ok: false, status: 404 });
+    expect(store.filter((x) => x.owner_kind === 'person')).toHaveLength(0);
+    expect(updates).toHaveLength(0);
   });
 
   test('a key that is not admin cannot mark one, nor itself (a guard: the parent refuses the field outright)', async () => {

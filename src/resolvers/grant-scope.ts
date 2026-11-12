@@ -114,8 +114,12 @@ function fail(status: number, code: GrantFailureCode, message: string): GrantFai
 }
 
 const POINTER_FIELDS = new Set(['type', 'key_id', 'add_scopes', 'owner_kind']);
-// How a key's row is found by its id: as validation finds it.
-const BY_ID = 'key_id = $key_id OR key_prefix = $key_id';
+// How a key's row is found by its id, as auth derives a key's id: key_id, or, on an old-format row (which has none), its
+// record id api_key:<id>. Never key_prefix: on an old-format row it holds the key itself, and on others a label many
+// keys share. The row found is then written by its record id, so a write changes that one row and no other.
+// record::id(id), not a record constructor: on the deployed SurrealDB (2.3) type::record is a cast with its arguments the
+// other way round (index.ts, the keys/sessions org check, uses the same form for the same reason).
+const BY_ID = 'key_id = $key_id OR record::id(id) = $key_id';
 // Any of these would set or shrink the scope set; this write only ever adds.
 const REMOVAL_FIELDS = ['remove_scopes', 'scopes', 'set_scopes', 'replace_scopes'];
 
@@ -161,9 +165,7 @@ export async function grantKeyScopes(pointer: unknown, authHeader: string | unde
   let row: any;
   try {
     query = await getQueryFn();
-    // By the rule a key is validated by (validation.ts lookupKeyRow): its id in key_id, or, on a row written before key_id
-    // was stored, in key_prefix. A key that authenticates is a key this write can find.
-    row = rows(await query(`SELECT key_id, org_id, scopes, owner_kind FROM api_key WHERE ${BY_ID} LIMIT 1;`, { key_id: keyId }))[0];
+    row = rows(await query(`SELECT id, key_id, org_id, scopes, owner_kind FROM api_key WHERE ${BY_ID} LIMIT 1;`, { key_id: keyId }))[0];
   } catch (err) {
     return fail(500, 'PERSIST_FAILED', err instanceof Error ? err.message : 'Failed to read api_key row');
   }
@@ -187,8 +189,8 @@ export async function grantKeyScopes(pointer: unknown, authHeader: string | unde
       let set: any;
       try {
         set = rows(await query(
-          `UPDATE api_key SET owner_kind = $owner_kind WHERE (${BY_ID}) AND org_id = $org_id RETURN key_id, owner_kind;`,
-          { owner_kind: kind, key_id: keyId, org_id: authz.org_id },
+          `UPDATE $rid SET owner_kind = $owner_kind WHERE org_id = $org_id RETURN owner_kind;`,
+          { owner_kind: kind, rid: row.id, org_id: authz.org_id },
         ))[0];
       } catch (err) {
         return fail(500, 'PERSIST_FAILED', err instanceof Error ? err.message : 'Failed to update api_key row');
@@ -208,8 +210,8 @@ export async function grantKeyScopes(pointer: unknown, authHeader: string | unde
   let updated: any;
   try {
     updated = rows(await query(
-      `UPDATE api_key SET scopes = array::union(scopes ?? [], $add) WHERE (${BY_ID}) AND org_id = $org_id RETURN key_id, scopes;`,
-      { add: toWrite, key_id: keyId, org_id: authz.org_id },
+      `UPDATE $rid SET scopes = array::union(scopes ?? [], $add) WHERE org_id = $org_id RETURN scopes;`,
+      { add: toWrite, rid: row.id, org_id: authz.org_id },
     ))[0];
   } catch (err) {
     return fail(500, 'PERSIST_FAILED', err instanceof Error ? err.message : 'Failed to update api_key row');

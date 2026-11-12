@@ -44,8 +44,11 @@ import { sign as signJwt } from 'hono/jwt';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 const ORG = 'organizations:alpha';
 const OTHER_ORG = 'organizations:beta';
-const WHERE = 'WHERE (key_id = $key_id OR key_prefix = $key_id) AND org_id = $org_id';
-const byId = (r: Record<string, any>, id: unknown) => r.key_id === id || r.key_prefix === id;
+const WHERE = 'WHERE org_id = $org_id';
+// The database finds what the SQL names: key_id; the record id when the query names record::id(id).
+const found = (sql: string) => (r: Record<string, any>, id: unknown) =>
+  r.key_id === id || (sql.includes('record::id(id) = $key_id') && r.id === `api_key:${String(id)}`);
+let recs = 0;
 
 let store: Record<string, any>[] = [];
 let reads = 0;
@@ -62,7 +65,7 @@ async function mint(org: string, user: string, scopes: string[], name?: string):
   const r = await mintApiKey({ org_id: org, user_id: user, scopes, ...(name ? { name } : {}) });
   setIssueQueryFn(null);
   if (!r.ok || !created) throw new Error('mint failed');
-  store.push({ ...(created as Record<string, any>), created_at: '2026-10-01T00:00:00Z', is_active: true });
+  store.push({ id: `api_key:rec${++recs}`, ...(created as Record<string, any>), created_at: '2026-10-01T00:00:00Z', is_active: true });
   return { key: r.key, keyId: r.key_id };
 }
 const rowOf = (keyId: string) => store.find((r) => r.key_id === keyId)!;
@@ -77,20 +80,20 @@ beforeEach(() => {
     const r = store.find((x) => x.key_id === params?.key_id);
     return r ? [{ scopes: [...r.scopes] }] : [];
   });
-  // The root connection: no PERMISSIONS. A SELECT reads; an UPDATE applies to every row its
-  // WHERE (key_id AND org_id) matches, and returns the RETURN projection.
+  // The root connection: no PERMISSIONS. A SELECT reads; an UPDATE applies to the record it names if its WHERE (org_id)
+  // matches, and returns the RETURN projection.
   setQueryFn(async (sql, params) => {
     if (sql.startsWith('SELECT')) {
       reads++;
-      const r = store.find((x) => byId(x, params?.key_id));
-      return r ? [{ key_id: r.key_id, org_id: r.org_id, scopes: [...r.scopes] }] : [];
+      const r = store.find((x) => found(sql)(x, params?.key_id));
+      return r ? [{ id: r.id, key_id: r.key_id, org_id: r.org_id, scopes: [...r.scopes] }] : [];
     }
-    expect(sql).toStartWith('UPDATE api_key SET');
+    expect(sql).toStartWith('UPDATE $rid SET');
     expect(sql).toContain(WHERE);
     updates.push({ sql, params: params ?? {} });
-    const hits = store.filter((r) => byId(r, params?.key_id) && r.org_id === params?.org_id);
+    const hits = store.filter((r) => r.id === params?.rid && r.org_id === params?.org_id);
     for (const r of hits) r.scopes = [...new Set([...(r.scopes ?? []), ...(params?.add ?? [])])];
-    return hits.map((r) => ({ key_id: r.key_id, scopes: [...r.scopes] }));
+    return hits.map((r) => ({ scopes: [...r.scopes] }));
   });
 });
 afterEach(() => {
@@ -131,9 +134,10 @@ describe('apiKey_write — admin-only scope add, no rotation, every guard in cod
     expect(updates).toHaveLength(1);
     const setClause = updates[0].sql.split(/\bSET\b/)[1].split(/\bWHERE\b/)[0];
     expect(setClause.trim()).toBe('scopes = array::union(scopes ?? [], $add)');
-    expect(updates[0].sql).toContain('RETURN key_id, scopes');
+    expect(updates[0].sql).toContain('RETURN scopes');
     expect(updates[0].params.org_id).toBe(ORG);
-    expect(Object.keys(updates[0].params).sort()).toEqual(['add', 'key_id', 'org_id']);
+    expect(Object.keys(updates[0].params).sort()).toEqual(['add', 'org_id', 'rid']);
+    expect(updates[0].params.rid).toBe(before.id); // the one row the lookup found
   });
 
   test('MUST-FAIL: a cross-org admin is refused by the code (403, no UPDATE sent), though the database would permit it', async () => {
