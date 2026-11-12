@@ -14,6 +14,7 @@
  */
 
 import { storedOrDerived } from './owner-kind';
+import { findKeyRow } from './key-row';
 import { createHmac, timingSafeEqual } from 'crypto';
 import type { ApiKeyComponents, ValidationResult } from '../types';
 import { redactCredential } from './redact';
@@ -260,19 +261,12 @@ async function lookupKeyRow(keyId: string): Promise<{ scopes: string[] | null; n
   try {
     const query = await getQueryFn();
 
-    // SurrealDB 3.x renamed `type::thing` → `type::record`; we avoid the helper
-    // entirely and match by `key_id` (HMAC-embedded) or `key_prefix` (operator
-    // label). Both fields are indexed (idx_api_key_key_id, idx_api_key_key_prefix).
-    const result = await query(
-      `SELECT scopes, name, owner_kind FROM api_key WHERE key_id = $key_id OR key_prefix = $key_id LIMIT 1;`,
-      { key_id: keyId }
-    );
-
-    // SurrealDB returns the result set directly via our query() helper.
-    const rows = Array.isArray(result) ? result : (result?.result ?? []);
-    if (!Array.isArray(rows) || rows.length === 0) {
+    // The one row for this id (services/key-row.ts), as apiKey_write finds it: none, or more than one, reads as no row.
+    const found = await findKeyRow(query, keyId, 'scopes, name, owner_kind');
+    if (!('row' in found)) {
       return { scopes: null, name: null };
     }
+    const rows = [found.row];
 
     const name = typeof rows[0]?.name === 'string' ? rows[0].name : null;
     const ownerKind = storedOrDerived(rows[0]?.owner_kind, name);

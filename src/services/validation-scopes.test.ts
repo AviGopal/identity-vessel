@@ -206,7 +206,7 @@ describe('DB-backed scope lookup', () => {
     // Defensive: SurrealDB clients sometimes return either a flat array or
     // a wrapped { result } object depending on driver version.
     setQueryFn(async () => ({ result: [{ scopes: ['admin'] }] }));
-    const scopes = await lookupKeyScopes('key_xyz');
+    const scopes = await lookupKeyScopes('key_xyzWrappedResult');
     expect(scopes).toEqual(['admin']);
   });
 });

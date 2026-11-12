@@ -47,7 +47,8 @@ const OTHER_ORG = 'organizations:beta';
 const WHERE = 'WHERE org_id = $org_id';
 // The database finds what the SQL names: key_id; the record id when the query names record::id(id).
 const found = (sql: string) => (r: Record<string, any>, id: unknown) =>
-  r.key_id === id || (sql.includes('record::id(id) = $key_id') && r.id === `api_key:${String(id)}`);
+  r.key_id === id || (sql.includes('record::id(id) = $key_id') && r.id === `api_key:${String(id)}`)
+  || (sql.includes('key_prefix = $key_id') && r.key_prefix === id);
 let recs = 0;
 
 let store: Record<string, any>[] = [];
@@ -85,8 +86,8 @@ beforeEach(() => {
   setQueryFn(async (sql, params) => {
     if (sql.startsWith('SELECT')) {
       reads++;
-      const r = store.find((x) => found(sql)(x, params?.key_id));
-      return r ? [{ id: r.id, key_id: r.key_id, org_id: r.org_id, scopes: [...r.scopes] }] : [];
+      return store.filter((x) => found(sql)(x, params?.key_id)).slice(0, Number(/LIMIT (\d+)/.exec(sql)?.[1] ?? Infinity))
+        .map((r) => ({ id: r.id, key_id: r.key_id, org_id: r.org_id, scopes: [...r.scopes] }));
     }
     expect(sql).toStartWith('UPDATE $rid SET');
     expect(sql).toContain(WHERE);
@@ -271,7 +272,7 @@ describe('apiKey_write — admin-only scope add, no rotation, every guard in cod
 
   test('an unknown key_id is NOT_FOUND, and an UPDATE that matches nothing is PERSIST_FAILED, never a success', async () => {
     const admin = await mint(ORG, 'users:sys', ['read', 'write', 'admin']);
-    const r = await grantKeyScopes({ key_id: 'key_nope', add_scopes: ['tools-exec'] }, `ApiKey ${admin.key}`);
+    const r = await grantKeyScopes({ key_id: 'key_unknownKeyId01', add_scopes: ['tools-exec'] }, `ApiKey ${admin.key}`);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe('NOT_FOUND');
     const target = await mint(ORG, 'users:sys', ['read', 'write']);

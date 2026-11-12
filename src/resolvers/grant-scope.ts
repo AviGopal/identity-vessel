@@ -45,6 +45,7 @@
  */
 
 import { authorizeAdmin } from './issue-key';
+import { findKeyRow } from '../services/key-row';
 
 export const API_KEY_WRITE_SHAPE = 'apiKey_write';
 
@@ -85,6 +86,7 @@ export type GrantFailureCode =
   | 'INVALID_JWT'
   | 'FORBIDDEN'
   | 'NOT_FOUND'
+  | 'AMBIGUOUS_KEY'
   | 'PERSIST_FAILED';
 
 export interface GrantSuccess {
@@ -114,12 +116,8 @@ function fail(status: number, code: GrantFailureCode, message: string): GrantFai
 }
 
 const POINTER_FIELDS = new Set(['type', 'key_id', 'add_scopes', 'owner_kind']);
-// How a key's row is found by its id, as auth derives a key's id: key_id, or, on an old-format row (which has none), its
-// record id api_key:<id>. Never key_prefix: on an old-format row it holds the key itself, and on others a label many
-// keys share. The row found is then written by its record id, so a write changes that one row and no other.
-// record::id(id), not a record constructor: on the deployed SurrealDB (2.3) type::record is a cast with its arguments the
-// other way round (index.ts, the keys/sessions org check, uses the same form for the same reason).
-const BY_ID = 'key_id = $key_id OR record::id(id) = $key_id';
+// The row is found as validation finds it (services/key-row.ts): one rule for both, so a key that authenticates is a key
+// this write can mark; then written by its record id, so a write changes that one row and no other.
 // Any of these would set or shrink the scope set; this write only ever adds.
 const REMOVAL_FIELDS = ['remove_scopes', 'scopes', 'set_scopes', 'replace_scopes'];
 
@@ -165,7 +163,10 @@ export async function grantKeyScopes(pointer: unknown, authHeader: string | unde
   let row: any;
   try {
     query = await getQueryFn();
-    row = rows(await query(`SELECT id, key_id, org_id, scopes, owner_kind FROM api_key WHERE ${BY_ID} LIMIT 1;`, { key_id: keyId }))[0];
+    const found = await findKeyRow(query, keyId, 'id, key_id, org_id, scopes, owner_kind');
+    if ('badId' in found) return fail(400, 'INVALID_INPUT', 'key_id must be a key id (key_ and its id), not a key or a label');
+    if ('ambiguous' in found) return fail(409, 'AMBIGUOUS_KEY', 'More than one key row matches this id: nothing was written');
+    row = 'row' in found ? found.row : undefined;
   } catch (err) {
     return fail(500, 'PERSIST_FAILED', err instanceof Error ? err.message : 'Failed to read api_key row');
   }

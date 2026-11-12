@@ -43,6 +43,8 @@ async function mint(scopes: string[], name: string): Promise<{ key: string; keyI
 const asQueried = (sql: string) => (r: Record<string, any>, id: unknown) =>
   r.key_id === id || (sql.includes('record::id(id) = $key_id') && r.id === `api_key:${String(id)}`)
   || (sql.includes('key_prefix = $key_id') && r.key_prefix === id);
+// Every row the SQL matches, up to its LIMIT, as SurrealDB answers.
+const limitOf = (sql: string) => Number(/LIMIT (\d+)/.exec(sql)?.[1] ?? Infinity);
 const rowOf = (keyId: string) => store.find((r) => r.key_id === keyId || r.id === `api_key:${keyId}`)!;
 let recs = 0;
 
@@ -50,14 +52,14 @@ beforeEach(() => {
   store = [];
   updates = [];
   setValidationQueryFn(async (_sql, params) => {
-    const r = store.find((x) => asQueried(_sql)(x, params?.key_id));
-    return r ? [{ scopes: [...r.scopes], name: r.name, owner_kind: r.owner_kind }] : [];
+    return store.filter((x) => asQueried(_sql)(x, params?.key_id)).slice(0, limitOf(_sql))
+      .map((r) => ({ scopes: [...r.scopes], name: r.name, owner_kind: r.owner_kind }));
   });
   setQueryFn(async (sql, params) => {
     const match = asQueried(sql);
     if (sql.startsWith('SELECT')) {
-      const r = store.find((x) => match(x, params?.key_id));
-      return r ? [{ id: r.id, key_id: r.key_id, org_id: r.org_id, scopes: [...r.scopes], owner_kind: r.owner_kind }] : [];
+      return store.filter((x) => match(x, params?.key_id)).slice(0, limitOf(sql))
+        .map((r) => ({ id: r.id, key_id: r.key_id, org_id: r.org_id, scopes: [...r.scopes], owner_kind: r.owner_kind }));
     }
     updates.push({ sql, params: params ?? {} });
     // a write names its record ($rid), or (the parent's form) every row its WHERE matches
@@ -107,11 +109,28 @@ describe('a person key', () => {
     expect(JSON.stringify(r)).not.toContain('mb_the_key_itself'); // the key itself is never echoed
   });
 
-  test('MUST-FAIL: a value many rows hold as key_prefix finds no key, and marks none of them', async () => {
+  test('MUST-FAIL: an HMAC key whose row keeps its id only in key_prefix is the row validation reads, and the mark marks it', async () => {
     const admin = await mint(['read', 'write', 'admin'], 'substrate-admin');
-    for (const n of [1, 2]) store.push({ id: `api_key:dup${n}`, org_id: ORG, user_id: 'users:sys', scopes: ['read', 'write'], key_prefix: 'dup', is_active: true });
-    const r = await grantKeyScopes({ type: 'apiKey_write', key_id: 'dup', owner_kind: 'person' }, `ApiKey ${admin.key}`);
-    expect(r).toMatchObject({ ok: false, status: 404 });
+    const k = await mint(['read', 'write'], 'a-surface-key');
+    const row = rowOf(k.keyId);
+    row.key_prefix = row.key_id; // the user-vessel schema's shape: the key's id in key_prefix, no key_id
+    delete row.key_id;
+    const v0 = await validateKey(k.key);
+    expect(v0.valid).toBe(true);
+    expect(v0.ownerKind).toBe('unclassified'); // validation reads this row (its name derives unclassified)
+    const r = await grantKeyScopes({ type: 'apiKey_write', key_id: k.keyId, owner_kind: 'person' }, `ApiKey ${admin.key}`);
+    expect(r).toMatchObject({ ok: true, owner_kind: 'person', changed: true });
+    expect(updates[0].params.rid).toBe(row.id); // the write names the very row validation read
+    expect((await validateKey(k.key)).ownerKind).toBe('person');
+    expect(JSON.stringify(r)).not.toContain('key_prefix');
+  });
+
+  test('MUST-FAIL: an id two rows share is refused, and neither is marked; a value not shaped like a key id is refused', async () => {
+    const admin = await mint(['read', 'write', 'admin'], 'substrate-admin');
+    for (const n of [1, 2]) store.push({ id: `api_key:dup${n}`, org_id: ORG, user_id: 'users:sys', scopes: ['read', 'write'], key_prefix: 'key_dupdupdupdup', is_active: true });
+    expect(await grantKeyScopes({ type: 'apiKey_write', key_id: 'key_dupdupdupdup', owner_kind: 'person' }, `ApiKey ${admin.key}`)).toMatchObject({ ok: false, status: 409 });
+    for (const n of [1, 2]) store.push({ id: `api_key:mb${n}`, org_id: ORG, user_id: 'users:sys', scopes: ['read', 'write'], key_prefix: 'mb', is_active: true });
+    expect(await grantKeyScopes({ type: 'apiKey_write', key_id: 'mb', owner_kind: 'person' }, `ApiKey ${admin.key}`)).toMatchObject({ ok: false, status: 400 });
     expect(store.filter((x) => x.owner_kind === 'person')).toHaveLength(0);
     expect(updates).toHaveLength(0);
   });
