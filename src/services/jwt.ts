@@ -188,7 +188,12 @@ export async function verifyToken(token: string, opts: VerifyTokenOptions = {}):
         return { valid: false, error: 'An on-behalf-of token is not accepted here' };
       }
       const p = payload as any;
-      if (opts.audience && !(p.aud === `substrate:${opts.audience.node}` && p.obo_shape === opts.audience.shape)) {
+      // Accepted only by a caller that states the node and shape it serves (as resolvers/auth.ts): a token any node
+      // accepted for anything would be the reusable credential it replaces.
+      if (!opts.audience) {
+        return { valid: false, error: 'An on-behalf-of token is accepted only by a validator that states its audience' };
+      }
+      if (!(p.aud === `substrate:${opts.audience.node}` && p.obo_shape === opts.audience.shape)) {
         return { valid: false, error: 'On-behalf-of token was minted for a different node or shape' };
       }
       return {

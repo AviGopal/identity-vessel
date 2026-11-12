@@ -103,9 +103,14 @@ async function resolveJWT(token: string, audience?: OboAudience | null): Promise
     if (isOboPayload(payload)) {
       // A federation on-behalf-of token. It names the CALLER (so the consumer authorizes
       // the real caller, never the ingress that obtained it) and is bound to one node
-      // and one shape. A validator that states which audience it serves is held to it.
+      // and one shape. A validator must state which audience it serves, and is held to it.
       const node = String(payload.aud ?? '').replace(/^substrate:/, '');
-      if (audience && !oboAudienceMatches(payload, audience)) {
+      // Only a validator that states the node and shape it serves accepts one: without it, a token minted for one node
+      // and one shape would be good at any node for anything, which is the reusable credential it exists to replace.
+      if (!audience) {
+        return { authenticated: false, reason: 'an on-behalf-of token is accepted only by a validator that states its audience' };
+      }
+      if (!oboAudienceMatches(payload, audience)) {
         return { authenticated: false, reason: 'on-behalf-of token was minted for a different node or shape' };
       }
       return {

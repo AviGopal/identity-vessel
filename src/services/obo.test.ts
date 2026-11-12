@@ -98,9 +98,18 @@ describe('mintOnBehalfOf', () => {
 });
 
 describe('validating an OBO token', () => {
-  test('plain verification reports the caller and the OBO binding', async () => {
+  test('[MUST-FAIL] a validator that states no audience refuses it, on both paths', async () => {
     const r = await mint();
-    const v = await verifyToken(r.token, { allowObo: true });
+    expect((await verifyToken(r.token, { allowObo: true })).valid).toBe(false);
+    for (const aud of [undefined, null]) {
+      const a = await resolveAuthentication({ type: 'authentication', pointer: { type: 'session', token: r.token } } as any, aud);
+      expect(a.authenticated).toBe(false);
+    }
+  });
+
+  test('verification that states the audience reports the caller and the OBO binding', async () => {
+    const r = await mint();
+    const v = await verifyToken(r.token, { allowObo: true, audience: { node: 'node-a', shape: 'fixtureRead' } });
     expect(v.valid).toBe(true);
     expect(v.user_id).toBe('users:caller');
     expect(v.obo?.node).toBe('node-a');
