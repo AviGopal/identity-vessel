@@ -33,6 +33,7 @@ import { issueApiKey, setQueryFn } from './issue-key';
 import { generateApiKey } from '../services/keyGeneration';
 import { setQueryFn as setValidationQueryFn, validateKey } from '../services/validation';
 import { sign as signJwt } from 'hono/jwt';
+import { createdRow } from '../db/created-row.test-helper';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 
@@ -56,7 +57,7 @@ describe('issueApiKey — admin-only key issuance', () => {
     setQueryFn(async (sql, params) => {
       captured.sql = sql;
       captured.params = params ?? null;
-      return [];
+      return createdRow(sql, params);
     });
 
     const result = await issueApiKey(
@@ -93,13 +94,27 @@ describe('issueApiKey — admin-only key issuance', () => {
       JWT_SECRET,
       'HS512',
     );
-    setQueryFn(async () => []);
+    setQueryFn(async (sql, params) => createdRow(sql, params));
 
     const result = await issueApiKey(
       { user_id: 'users:bob', org_id: 'organizations:metabob' },
       `Bearer ${adminToken}`,
     );
     expect(result.ok).toBe(true);
+  });
+
+  test('MUST-FAIL: a CREATE that makes no row, or another key\'s row, issues no key (500 PERSIST_FAILED)', async () => {
+    const adminKey = generateApiKey('organizations:metabob', 'users:admin', {});
+    setValidationQueryFn(async () => [{ scopes: ['admin'] }]);
+    for (const answer of [[], [{ id: 'api_key:other', key_id: 'key_someoneElse01' }]]) {
+      setQueryFn(async () => answer);
+      const result: any = await issueApiKey({ user_id: 'users:bob', org_id: 'organizations:metabob' }, `ApiKey ${adminKey.key}`);
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe(500);
+      expect(result.code).toBe('PERSIST_FAILED');
+      expect(result.key).toBeUndefined();
+      expect(String(result.message)).toContain('org_id is an organizations: reference');
+    }
   });
 
   test('non-admin ApiKey caller gets 403 and no DB write', async () => {
@@ -143,7 +158,7 @@ describe('issueApiKey — admin-only key issuance', () => {
   test('generated key authenticates via validateKey() round-trip', async () => {
     const adminKey = generateApiKey('organizations:metabob', 'users:admin', {});
     setValidationQueryFn(async () => [{ scopes: ['admin'] }]);
-    setQueryFn(async () => []);
+    setQueryFn(async (sql, params) => createdRow(sql, params));
 
     const issued = await issueApiKey(
       {
@@ -178,7 +193,7 @@ describe('issueApiKey — admin-only key issuance', () => {
     let captured: { sql: string; params: Record<string, any> } | null = null;
     setQueryFn(async (sql, params) => {
       captured = { sql, params: params ?? {} };
-      return [];
+      return createdRow(sql, params);
     });
 
     const result = await issueApiKey(
@@ -215,9 +230,9 @@ describe('issueApiKey — admin-only key issuance', () => {
     const adminKey = generateApiKey('organizations:metabob', 'users:admin', {});
     setValidationQueryFn(async () => [{ scopes: ['admin'] }]);
     const writes: Record<string, any>[] = [];
-    setQueryFn(async (_sql, params) => {
+    setQueryFn(async (sql, params) => {
       writes.push(params ?? {});
-      return [];
+      return createdRow(sql, params);
     });
     const auth = `ApiKey ${adminKey.key}`;
     const noUser = await issueApiKey({ org_id: 'organizations:metabob' }, auth);

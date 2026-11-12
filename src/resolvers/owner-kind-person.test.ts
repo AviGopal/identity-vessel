@@ -22,6 +22,7 @@ mock.module('../db/surrealdb', () => ({
 import { grantKeyScopes, setQueryFn } from './grant-scope';
 import { mintApiKey, setQueryFn as setIssueQueryFn } from './issue-key';
 import { setQueryFn as setValidationQueryFn, validateKey } from '../services/validation';
+import { createdRow } from '../db/created-row.test-helper';
 import { deriveOwnerKind, ownerKindAtIssue, OWNER_KINDS } from '../services/owner-kind';
 
 const ORG = 'organizations:alpha';
@@ -30,7 +31,7 @@ let updates: Array<{ sql: string; params: Record<string, any> }> = [];
 
 async function mint(scopes: string[], name: string): Promise<{ key: string; keyId: string }> {
   let created: Record<string, any> | null = null;
-  setIssueQueryFn(async (_sql, params) => { created = { ...(params ?? {}) }; return []; });
+  setIssueQueryFn(async (sql, params) => { created = { ...(params ?? {}) }; return createdRow(sql, params); });
   const r = await mintApiKey({ org_id: ORG, user_id: 'users:sys', scopes, name });
   setIssueQueryFn(null);
   if (!r.ok || !created) throw new Error('mint failed');

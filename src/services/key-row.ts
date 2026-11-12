@@ -16,7 +16,8 @@ export const KEY_ROW_BY_ID = 'key_id = $key_id OR key_prefix = $key_id OR record
 type QueryFn = (sql: string, params?: Record<string, any>) => Promise<any>;
 export type KeyRowFound = { row: Record<string, any> } | { none: true } | { ambiguous: true } | { badId: true };
 
-const rowsOf = (result: unknown): any[] => (Array.isArray(result) ? result : ((result as any)?.result ?? []));
+/** The rows a query answered: the wrapper gives a statement's result as an array, or as { result }. */
+export const rowsOf = (result: unknown): any[] => (Array.isArray(result) ? result : ((result as any)?.result ?? []));
 
 /** The single api_key row for a key id, selecting `fields` (never the key value or hash), or why there is none. */
 export async function findKeyRow(query: QueryFn, keyId: unknown, fields: string): Promise<KeyRowFound> {

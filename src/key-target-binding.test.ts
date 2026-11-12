@@ -59,7 +59,7 @@ function probe(): Result {
           if (/CREATE api_key/.test(sql)) {
             creates.push({ org_id: params?.org_id, user_id: params?.user_id, scopes: params?.scopes });
             rows[params.key_id] = { scopes: params.scopes };
-            return [];
+            return [{ id: 'api_key:created', ...params }];
           }
           if (/FROM api_key WHERE key_id = \\$key_id/.test(sql) && rows[params?.key_id]) return [rows[params.key_id]];
           return [];

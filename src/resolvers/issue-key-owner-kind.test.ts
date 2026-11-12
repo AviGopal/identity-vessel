@@ -27,6 +27,7 @@ mock.module('../db/surrealdb', () => ({
 }));
 
 import { mintApiKey, setQueryFn } from './issue-key';
+import { createdRow } from '../db/created-row.test-helper';
 
 const ORG = 'organizations:fixtureorg';
 const USER = 'users:fixture';
@@ -37,7 +38,7 @@ async function mint(body: Record<string, unknown>): Promise<{ result: any; sql: 
   setQueryFn(async (s, p) => {
     sql = s;
     params = p ?? null;
-    return [];
+    return createdRow(s, p);
   });
   const result = await mintApiKey({ org_id: ORG, user_id: USER, ...body });
   return { result, sql, params };

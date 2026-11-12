@@ -17,6 +17,7 @@ import { verify as verifyJwt } from 'hono/jwt';
 import { safeJwtErrorMessage } from '../services/redact';
 import { createHash } from 'crypto';
 import { ownerKindAtIssue, isNodeName, type OwnerKind } from '../services/owner-kind';
+import { rowsOf } from '../services/key-row';
 
 type QueryFn = (sql: string, params?: Record<string, any>) => Promise<any>;
 let queryOverride: QueryFn | null = null;
@@ -311,11 +312,23 @@ export async function mintApiKey(body: unknown): Promise<IssueKeyResult> {
   if (validated.name) params.name = validated.name;
   if (generated.expiresAt) params.expires_at = generated.expiresAt;
 
+  // The row must be there before the key is handed out. A key validates by its signature alone, with default scopes,
+  // so a CREATE that wrote nothing (a statement the database refused or filtered by PERMISSIONS answers no record
+  // rather than throwing) handed out a working key no lookup could find, mark or revoke durably. The CREATE answers the
+  // record it made: exactly one, carrying this key's id, or the key is not issued.
+  let created: any[];
   try {
     const query = await getQueryFn();
-    await query(sql, params);
+    created = rowsOf(await query(sql, params));
   } catch (err) {
     return fail(500, 'PERSIST_FAILED', err instanceof Error ? err.message : 'Failed to persist api_key row');
+  }
+  if (created.length !== 1 || created[0]?.key_id !== generated.keyId) {
+    // What the schema's asserts need of the target, said without the values: the likeliest reason a CREATE makes nothing.
+    const shaped = `org_id ${String(validated.org_id).startsWith('organizations:') ? 'is' : 'is NOT'} an organizations: reference, ` +
+      `user_id ${String(validated.user_id).startsWith('users:') ? 'is' : 'is NOT'} a users: reference`;
+    console.error('[KeyIssuance] the api_key CREATE made no row:', { records: created.length, shaped });
+    return fail(500, 'PERSIST_FAILED', `the api_key row was not created (the database answered ${created.length} records; ${shaped}): no key was issued`);
   }
 
   return {

@@ -40,6 +40,7 @@ import { grantKeyScopes, setQueryFn, GRANTABLE_SCOPES } from './grant-scope';
 import { mintApiKey, setQueryFn as setIssueQueryFn } from './issue-key';
 import { setQueryFn as setValidationQueryFn, validateKey } from '../services/validation';
 import { sign as signJwt } from 'hono/jwt';
+import { createdRow } from '../db/created-row.test-helper';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 const ORG = 'organizations:alpha';
@@ -61,7 +62,7 @@ async function mint(org: string, user: string, scopes: string[], name?: string):
   setIssueQueryFn(async (sql, params) => {
     expect(sql).toStartWith('CREATE api_key SET');
     created = { ...(params ?? {}) };
-    return [];
+    return createdRow(sql, params);
   });
   const r = await mintApiKey({ org_id: org, user_id: user, scopes, ...(name ? { name } : {}) });
   setIssueQueryFn(null);

@@ -35,6 +35,7 @@ mock.module('./surrealdb', () => ({
 
 import { mintApiKey, setQueryFn } from '../resolvers/issue-key';
 import { recordKeySession } from '../services/keySession';
+import { createdRow } from './created-row.test-helper';
 
 const MIGRATIONS = join(import.meta.dir, '../../sql/migrations');
 
@@ -67,7 +68,7 @@ async function issueKeyCreate(): Promise<{ sql: string; params: Record<string, u
   const captured: Array<{ sql: string; params: Record<string, unknown> }> = [];
   setQueryFn(async (sql, params) => {
     captured.push({ sql, params: params ?? {} });
-    return [];
+    return createdRow(sql, params);
   });
   try {
     const res = await mintApiKey({ user_id: 'users:u1', org_id: 'organizations:o1', name: 'n', expires_in_days: 30 });
