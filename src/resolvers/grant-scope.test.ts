@@ -44,7 +44,8 @@ import { sign as signJwt } from 'hono/jwt';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 const ORG = 'organizations:alpha';
 const OTHER_ORG = 'organizations:beta';
-const WHERE = 'WHERE key_id = $key_id AND org_id = $org_id';
+const WHERE = 'WHERE (key_id = $key_id OR key_prefix = $key_id) AND org_id = $org_id';
+const byId = (r: Record<string, any>, id: unknown) => r.key_id === id || r.key_prefix === id;
 
 let store: Record<string, any>[] = [];
 let reads = 0;
@@ -81,13 +82,13 @@ beforeEach(() => {
   setQueryFn(async (sql, params) => {
     if (sql.startsWith('SELECT')) {
       reads++;
-      const r = store.find((x) => x.key_id === params?.key_id);
+      const r = store.find((x) => byId(x, params?.key_id));
       return r ? [{ key_id: r.key_id, org_id: r.org_id, scopes: [...r.scopes] }] : [];
     }
     expect(sql).toStartWith('UPDATE api_key SET');
     expect(sql).toContain(WHERE);
     updates.push({ sql, params: params ?? {} });
-    const hits = store.filter((r) => r.key_id === params?.key_id && r.org_id === params?.org_id);
+    const hits = store.filter((r) => byId(r, params?.key_id) && r.org_id === params?.org_id);
     for (const r of hits) r.scopes = [...new Set([...(r.scopes ?? []), ...(params?.add ?? [])])];
     return hits.map((r) => ({ key_id: r.key_id, scopes: [...r.scopes] }));
   });

@@ -37,22 +37,28 @@ async function mint(scopes: string[], name: string): Promise<{ key: string; keyI
   store.push({ ...(created as Record<string, any>), is_active: true });
   return { key: r.key, keyId: r.key_id };
 }
-const rowOf = (keyId: string) => store.find((r) => r.key_id === keyId)!;
+// A row is found by its id as validation finds it: in key_id, or in key_prefix on a row written before key_id was stored.
+const byId = (r: Record<string, any>, id: unknown) => r.key_id === id || r.key_prefix === id;
+// The database matches what the SQL says: key_prefix only when the query names it.
+const asQueried = (sql: string) => (r: Record<string, any>, id: unknown) =>
+  r.key_id === id || (sql.includes('key_prefix = $key_id') && r.key_prefix === id);
+const rowOf = (keyId: string) => store.find((r) => byId(r, keyId))!;
 
 beforeEach(() => {
   store = [];
   updates = [];
   setValidationQueryFn(async (_sql, params) => {
-    const r = store.find((x) => x.key_id === params?.key_id);
+    const r = store.find((x) => asQueried(_sql)(x, params?.key_id));
     return r ? [{ scopes: [...r.scopes], name: r.name, owner_kind: r.owner_kind }] : [];
   });
   setQueryFn(async (sql, params) => {
+    const match = asQueried(sql);
     if (sql.startsWith('SELECT')) {
-      const r = store.find((x) => x.key_id === params?.key_id);
+      const r = store.find((x) => match(x, params?.key_id));
       return r ? [{ key_id: r.key_id, org_id: r.org_id, scopes: [...r.scopes], owner_kind: r.owner_kind }] : [];
     }
     updates.push({ sql, params: params ?? {} });
-    const hits = store.filter((r) => r.key_id === params?.key_id && r.org_id === params?.org_id);
+    const hits = store.filter((r) => match(r, params?.key_id) && r.org_id === params?.org_id);
     if (sql.includes('SET owner_kind')) {
       for (const r of hits) r.owner_kind = params?.owner_kind;
       return hits.map((r) => ({ key_id: r.key_id, owner_kind: r.owner_kind }));
@@ -73,13 +79,26 @@ describe('a person key', () => {
     expect(r).toMatchObject({ ok: true, owner_kind: 'person', changed: true, added: [] });
     expect(updates).toHaveLength(1);
     expect(updates[0].sql.split(/\bSET\b/)[1].split(/\bWHERE\b/)[0].trim()).toBe('owner_kind = $owner_kind');
-    expect(updates[0].sql).toContain('WHERE key_id = $key_id AND org_id = $org_id');
+    expect(updates[0].sql).toContain('WHERE (key_id = $key_id OR key_prefix = $key_id) AND org_id = $org_id');
     expect({ ...rowOf(target.keyId), owner_kind: undefined }).toEqual({ ...before, owner_kind: undefined });
     expect((await validateKey(target.key)).ownerKind).toBe('person');
     // marking it again writes nothing
     const again = await grantKeyScopes({ type: 'apiKey_write', key_id: target.keyId, owner_kind: 'person' }, `ApiKey ${admin.key}`);
     expect(again).toMatchObject({ ok: true, changed: false, owner_kind: 'person' });
     expect(updates).toHaveLength(1);
+  });
+
+  test('MUST-FAIL: a key whose id its row holds as key_prefix (written before key_id was stored) is found and marked', async () => {
+    const admin = await mint(['read', 'write', 'admin'], 'substrate-admin');
+    const old = await mint(['read', 'write'], 'a-dashboard-key');
+    const row = rowOf(old.keyId);
+    row.key_prefix = row.key_id;
+    delete row.key_id;
+    expect((await validateKey(old.key)).valid).toBe(true); // it authenticates
+    const r = await grantKeyScopes({ type: 'apiKey_write', key_id: old.keyId, owner_kind: 'person' }, `ApiKey ${admin.key}`);
+    expect(r).toMatchObject({ ok: true, owner_kind: 'person', changed: true });
+    expect(rowOf(old.keyId).owner_kind).toBe('person');
+    expect((await validateKey(old.key)).ownerKind).toBe('person');
   });
 
   test('a key that is not admin cannot mark one, nor itself (a guard: the parent refuses the field outright)', async () => {
