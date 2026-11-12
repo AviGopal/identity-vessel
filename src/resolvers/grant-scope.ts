@@ -37,6 +37,11 @@
  *     which is written out along with the new scope.
  *   - Idempotent: a key that already holds every requested scope is not written.
  *   - Audit: one log line naming key_id and the scopes added. Never a key value.
+ *
+ * It also marks whose a key is (owner_kind), with the same guards (admin only, the admin's own org, key_id only, no
+ * rotation): only 'person' or 'operator'. A person key's rows are taken as that person's own (records stamps role
+ * person for nothing else), so which key is a person's is said by an admin who knows, never derived; 'system' and
+ * 'peer' stay what issue and the seeder say. The UPDATE sets owner_kind and nothing else.
  */
 
 import { authorizeAdmin } from './issue-key';
@@ -88,7 +93,12 @@ export interface GrantSuccess {
   scopes: string[];
   added: string[];
   changed: boolean;
+  /** The key's owner_kind after the write, when the pointer set one. */
+  owner_kind?: string;
 }
+
+/** The classes an admin may mark an existing key with. */
+export const SETTABLE_OWNER_KINDS: readonly string[] = Object.freeze(['person', 'operator']);
 
 export interface GrantFailure {
   ok: false;
@@ -103,7 +113,7 @@ function fail(status: number, code: GrantFailureCode, message: string): GrantFai
   return { ok: false, status, code, message };
 }
 
-const POINTER_FIELDS = new Set(['type', 'key_id', 'add_scopes']);
+const POINTER_FIELDS = new Set(['type', 'key_id', 'add_scopes', 'owner_kind']);
 // Any of these would set or shrink the scope set; this write only ever adds.
 const REMOVAL_FIELDS = ['remove_scopes', 'scopes', 'set_scopes', 'replace_scopes'];
 
@@ -127,11 +137,19 @@ export async function grantKeyScopes(pointer: unknown, authHeader: string | unde
   if (typeof p.key_id !== 'string' || p.key_id.length === 0) {
     return fail(400, 'INVALID_INPUT', 'key_id must be a non-empty string');
   }
-  if (!Array.isArray(p.add_scopes) || p.add_scopes.length === 0 || p.add_scopes.some((s) => typeof s !== 'string')) {
+  const kind = p.owner_kind;
+  if (kind !== undefined && (typeof kind !== 'string' || !SETTABLE_OWNER_KINDS.includes(kind))) {
+    return fail(400, 'INVALID_INPUT', `owner_kind may only be set to ${SETTABLE_OWNER_KINDS.join(' or ')}`);
+  }
+  if (p.add_scopes === undefined && kind === undefined) {
+    return fail(400, 'INVALID_INPUT', 'add_scopes or owner_kind is required');
+  }
+  if (p.add_scopes !== undefined
+      && (!Array.isArray(p.add_scopes) || p.add_scopes.length === 0 || p.add_scopes.some((s) => typeof s !== 'string'))) {
     return fail(400, 'INVALID_INPUT', 'add_scopes must be a non-empty array of strings');
   }
   const keyId = p.key_id;
-  const add = [...new Set(p.add_scopes as string[])];
+  const add = [...new Set((p.add_scopes ?? []) as string[])];
   const refused = add.filter((s) => !GRANTABLE_SCOPES.includes(s));
   if (refused.length > 0) {
     return fail(403, 'SCOPE_NOT_GRANTABLE', `not grantable: ${refused.join(', ')} (grantable: ${GRANTABLE_SCOPES.join(', ')})`);
@@ -141,7 +159,7 @@ export async function grantKeyScopes(pointer: unknown, authHeader: string | unde
   let row: any;
   try {
     query = await getQueryFn();
-    row = rows(await query(`SELECT key_id, org_id, scopes FROM api_key WHERE key_id = $key_id LIMIT 1;`, { key_id: keyId }))[0];
+    row = rows(await query(`SELECT key_id, org_id, scopes, owner_kind FROM api_key WHERE key_id = $key_id LIMIT 1;`, { key_id: keyId }))[0];
   } catch (err) {
     return fail(500, 'PERSIST_FAILED', err instanceof Error ? err.message : 'Failed to read api_key row');
   }
@@ -155,8 +173,31 @@ export async function grantKeyScopes(pointer: unknown, authHeader: string | unde
   const stored: string[] = Array.isArray(row.scopes) ? row.scopes : [];
   const current = stored.length > 0 ? stored : [...DEFAULT_SCOPES];
   const missing = add.filter((s) => !current.includes(s));
+
+  // The owner_kind mark: its own UPDATE, setting that field only, and only when it differs.
+  let marked: { owner_kind?: string; changed: boolean } = { changed: false };
+  if (kind !== undefined) {
+    if (row.owner_kind === kind) {
+      marked = { owner_kind: kind, changed: false };
+    } else {
+      let set: any;
+      try {
+        set = rows(await query(
+          `UPDATE api_key SET owner_kind = $owner_kind WHERE key_id = $key_id AND org_id = $org_id RETURN key_id, owner_kind;`,
+          { owner_kind: kind, key_id: keyId, org_id: authz.org_id },
+        ))[0];
+      } catch (err) {
+        return fail(500, 'PERSIST_FAILED', err instanceof Error ? err.message : 'Failed to update api_key row');
+      }
+      if (!set) return fail(500, 'PERSIST_FAILED', 'The api_key row was not updated');
+      console.log('[OwnerKindMark]', { key_id: keyId, owner_kind: kind });
+      marked = { owner_kind: kind, changed: true };
+    }
+  }
+  const kindOut = marked.owner_kind !== undefined ? { owner_kind: marked.owner_kind } : {};
+
   if (missing.length === 0) {
-    return { ok: true, key_id: keyId, scopes: [...current], added: [], changed: false };
+    return { ok: true, key_id: keyId, scopes: [...current], added: [], changed: marked.changed, ...kindOut };
   }
   const toWrite = [...current.filter((s) => !stored.includes(s)), ...missing];
 
@@ -178,5 +219,6 @@ export async function grantKeyScopes(pointer: unknown, authHeader: string | unde
     scopes: Array.isArray(updated.scopes) ? updated.scopes : [...current, ...missing],
     added: missing,
     changed: true,
+    ...kindOut,
   };
 }

@@ -13,6 +13,7 @@
  * preserve existing canary auth flows (graceful degradation).
  */
 
+import { storedOrDerived } from './owner-kind';
 import { createHmac, timingSafeEqual } from 'crypto';
 import type { ApiKeyComponents, ValidationResult } from '../types';
 import { redactCredential } from './redact';
@@ -253,7 +254,7 @@ export async function lookupKeyScopes(keyId: string): Promise<string[] | null> {
  * `name` (null when the row is missing or unnamed) so a consumer can attribute a
  * write by it. Only scopes and name are selected: never the key value or hash.
  */
-async function lookupKeyRow(keyId: string): Promise<{ scopes: string[] | null; name: string | null }> {
+async function lookupKeyRow(keyId: string): Promise<{ scopes: string[] | null; name: string | null; ownerKind?: string }> {
   if (!keyId) return { scopes: null, name: null };
 
   try {
@@ -263,7 +264,7 @@ async function lookupKeyRow(keyId: string): Promise<{ scopes: string[] | null; n
     // entirely and match by `key_id` (HMAC-embedded) or `key_prefix` (operator
     // label). Both fields are indexed (idx_api_key_key_id, idx_api_key_key_prefix).
     const result = await query(
-      `SELECT scopes, name FROM api_key WHERE key_id = $key_id OR key_prefix = $key_id LIMIT 1;`,
+      `SELECT scopes, name, owner_kind FROM api_key WHERE key_id = $key_id OR key_prefix = $key_id LIMIT 1;`,
       { key_id: keyId }
     );
 
@@ -274,13 +275,14 @@ async function lookupKeyRow(keyId: string): Promise<{ scopes: string[] | null; n
     }
 
     const name = typeof rows[0]?.name === 'string' ? rows[0].name : null;
+    const ownerKind = storedOrDerived(rows[0]?.owner_kind, name);
     const scopes = rows[0]?.scopes;
     if (!Array.isArray(scopes) || scopes.length === 0) {
-      return { scopes: null, name };
+      return { scopes: null, name, ownerKind };
     }
 
     // Defensive: ensure every entry is a string before returning.
-    return { scopes: scopes.every((s) => typeof s === 'string') ? scopes : null, name };
+    return { scopes: scopes.every((s) => typeof s === 'string') ? scopes : null, name, ownerKind };
   } catch (error) {
     // Graceful degradation: log once, return null so caller uses defaults.
     console.warn('[validation] lookupKeyScopes failed, falling back to defaults', {
@@ -367,8 +369,9 @@ export async function validateKey(apiKey: string): Promise<ValidationResult> {
   const result = validateKeyFormat(apiKey);
 
   if (result.valid && result.keyId) {
-    const { scopes, name } = await lookupKeyRow(result.keyId);
-    return scopes !== null ? { ...result, scopes, name } : { ...result, name };
+    const { scopes, name, ownerKind } = await lookupKeyRow(result.keyId);
+    const kind = ownerKind !== undefined ? { ownerKind } : {};
+    return scopes !== null ? { ...result, scopes, name, ...kind } : { ...result, name, ...kind };
   }
 
   // Local verification failed — maybe a foreign key signed by a trusted issuer.

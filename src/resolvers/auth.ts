@@ -14,6 +14,7 @@
  *   for activity-api adopting `$token.account_id` in PERMISSIONS clauses.
  */
 
+import { storedOrDerived } from '../services/owner-kind';
 import type { AuthenticationImpulse, AuthenticationResult } from '../types';
 import { validateKey } from '../services/validation';
 import { isKeyRevoked } from '../db/redis';
@@ -148,7 +149,7 @@ async function resolveAPIKeyLegacy(apiKey: string): Promise<AuthenticationResult
   try {
     const { query } = await import('../db/surrealdb');
     const rows = await query<any[]>(
-      `SELECT id, key_id, org_id, user_id, scopes, name, is_active FROM api_key WHERE key_prefix = $kp LIMIT 1;`,
+      `SELECT id, key_id, org_id, user_id, scopes, name, is_active, owner_kind FROM api_key WHERE key_prefix = $kp LIMIT 1;`,
       { kp: apiKey },
     );
     const row = Array.isArray(rows) ? rows[0] : undefined;
@@ -162,6 +163,7 @@ async function resolveAPIKeyLegacy(apiKey: string): Promise<AuthenticationResult
       type: 'api_key',
       scopes: Array.isArray(row.scopes) ? row.scopes : ['read', 'write'],
       name: typeof row.name === 'string' ? row.name : null,
+      ownerKind: storedOrDerived(row.owner_kind, row.name),
     };
   } catch {
     return null;
@@ -207,6 +209,7 @@ async function resolveAPIKey(apiKey: string): Promise<AuthenticationResult> {
     type: 'api_key',
     scopes: validation.scopes ?? ['read', 'write'],
     name: validation.name ?? null,
+    ...(validation.ownerKind !== undefined ? { ownerKind: validation.ownerKind } : {}),
   };
 }
 

@@ -9,8 +9,11 @@
  * field that carries its issuance. No imports: the unit-start schema step loads this module.
  */
 
-export type OwnerKind = 'system' | 'operator' | 'peer' | 'unclassified';
-export const OWNER_KINDS: readonly OwnerKind[] = Object.freeze(['system', 'operator', 'peer', 'unclassified'] as OwnerKind[]);
+// 'person': a key one person holds as their own, whose rows other vessels may take as that person's verdict (records
+// stamps role person only for it). Never derived and never declared at issue: an admin marks an existing key so
+// (apiKey_write owner_kind), knowing whose it is; nothing in a key's name or issuance can say that.
+export type OwnerKind = 'system' | 'operator' | 'peer' | 'person' | 'unclassified';
+export const OWNER_KINDS: readonly OwnerKind[] = Object.freeze(['system', 'operator', 'peer', 'person', 'unclassified'] as OwnerKind[]);
 
 /**
  * Names the identity seeder (scripts/substrate/seed-identity.ts) gives the keys it issues to
@@ -95,7 +98,7 @@ export interface BackfillReport { stamped: Record<OwnerKind, number>; failed: nu
 export async function backfillOwnerKind(
   run: (sql: string, params?: Record<string, unknown>) => Promise<unknown[]>,
 ): Promise<BackfillReport> {
-  const report: BackfillReport = { stamped: { system: 0, operator: 0, peer: 0, unclassified: 0 }, failed: 0 };
+  const report: BackfillReport = { stamped: { system: 0, operator: 0, peer: 0, person: 0, unclassified: 0 }, failed: 0 };
   const [rows] = await run(BACKFILL_SELECT);
   for (const r of Array.isArray(rows) ? rows : []) {
     if (!r || typeof r !== 'object' || !('id' in r)) continue;

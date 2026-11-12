@@ -77,7 +77,7 @@ describe('the backfill of existing rows', () => {
       { id: 'api_key:fixture2', owner_kind: 'unclassified' },
       { id: 'api_key:fixture4', owner_kind: 'unclassified' },
     ]);
-    expect(r).toEqual({ stamped: { system: 1, operator: 0, peer: 0, unclassified: 2 }, failed: 1 });
+    expect(r).toEqual({ stamped: { system: 1, operator: 0, peer: 0, person: 0, unclassified: 2 }, failed: 1 });
     expect(BACKFILL_SELECT).toContain('WHERE owner_kind = NONE');
     expect(BACKFILL_UPDATE).toContain('WHERE owner_kind = NONE');
     expect(BACKFILL_SELECT).not.toContain('key_hash');
@@ -90,6 +90,15 @@ describe('the backfill of existing rows', () => {
     const text = readFileSync(join(MIGRATIONS_DIR, '005-api-key-owner-kind.surql'), 'utf8');
     expect(text).toMatch(/DEFINE FIELD OVERWRITE owner_kind ON api_key TYPE option<string>/);
     expect(text).toContain('["system", "operator", "peer", "unclassified"]');
+  });
+
+  test('MUST-FAIL: migration 007 lets owner_kind be person, keeps every earlier value, and ships after 006', async () => {
+    const files = await migrationFiles();
+    expect(files).toContain('007-api-key-owner-kind-person.surql');
+    expect(files.indexOf('007-api-key-owner-kind-person.surql')).toBeGreaterThan(files.indexOf('006-api-key-owner-node.surql'));
+    const text = readFileSync(join(MIGRATIONS_DIR, '007-api-key-owner-kind-person.surql'), 'utf8');
+    expect(text).toMatch(/DEFINE FIELD OVERWRITE owner_kind ON api_key TYPE option<string>/);
+    expect(text).toContain('["system", "operator", "peer", "person", "unclassified"]');
   });
 
   test('the unit start runs the backfill after the files, and a backfill that fails does not fail the start', async () => {

@@ -62,7 +62,7 @@
  * - POST /v1/auth/resolve     - Resolve authentication impulse (JWT or API key)
  *   Also the door for the apiKey_write impulse (admin-only scope add, no rotation):
  *   Header: Authorization: ApiKey <admin key> | Bearer <admin JWT>
- *   Body:   { impulse: { pointer: { type: 'apiKey_write', key_id, add_scopes[] } } }
+ *   Body:   { impulse: { pointer: { type: 'apiKey_write', key_id, add_scopes[]?, owner_kind? } } } (owner_kind: person | operator)
  *   Response: { success, data: { key_id, scopes[], added[], changed } }
  *   Also the door for the apiKeyClass impulse (service-key read, resolvers/key-class.ts):
  *   Header: Authorization: ApiKey <service key>   (a Bearer token is refused)
@@ -292,7 +292,8 @@ app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 100, buck
       }
       return c.json({
         success: true,
-        data: { key_id: granted.key_id, scopes: granted.scopes, added: granted.added, changed: granted.changed },
+        data: { key_id: granted.key_id, scopes: granted.scopes, added: granted.added, changed: granted.changed,
+          ...(granted.owner_kind !== undefined ? { owner_kind: granted.owner_kind } : {}) },
       });
     }
 

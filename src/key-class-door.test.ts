@@ -50,7 +50,7 @@ function probe(auth: 'service' | 'bearer' | 'invalid'): Result {
       }));
       mock.module(${src('db/surrealdb.ts')}, () => ({
         query: async (sql, params) => {
-          if (/SELECT scopes, name FROM api_key/.test(sql)) return [{ scopes: ['read', 'write'] }];
+          if (/SELECT scopes, name(, owner_kind)? FROM api_key/.test(sql)) return [{ scopes: ['read', 'write'] }];
           if (/FROM api_key WHERE org_id/.test(sql)) { reads.push({ sql, params }); return ${JSON.stringify(ROWS)}; }
           return [];
         },

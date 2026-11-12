@@ -39,6 +39,8 @@ export interface ValidationResult {
   scopes?: string[];
   /** The api_key row's human-readable name; null when the key has none. */
   name?: string | null;
+  /** The key's class (services/owner-kind.ts): stored, or derived from its name; absent when its row was not read. */
+  ownerKind?: string;
   error?: string;
 }
 
@@ -95,6 +97,9 @@ export interface AuthenticationResult {
   scopes?: string[];
   /** The validated api key's name (null when unnamed); absent for a session. */
   name?: string | null;
+  /** The validated api key's class (owner-kind.ts); absent for a session or a key whose row was not read. Readers that
+   * take a key's rows as a person's take them only when this is 'person'. */
+  ownerKind?: string;
   reason?: string;
   /**
    * Present when the credential was a federation on-behalf-of token: the node and
