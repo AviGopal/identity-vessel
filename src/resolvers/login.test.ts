@@ -56,7 +56,7 @@ let userIdCounter = 0;
 async function fakeQuery(sql: string, params?: Record<string, any>): Promise<any> {
   const norm = sql.replace(/\s+/g, ' ').trim();
 
-  if (norm.startsWith('SELECT id, email, password_hash, default_org_id FROM users WHERE email')) {
+  if (norm.startsWith('SELECT id, email, name, password_hash, org_id FROM users WHERE email')) {
     const row = DB.users.get((params?.email || '').toLowerCase());
     return row ? [[row]] : [[]];
   }
@@ -64,7 +64,7 @@ async function fakeQuery(sql: string, params?: Record<string, any>): Promise<any
     const row = DB.users.get((params?.email || '').toLowerCase());
     return row ? [[{ id: row.id }]] : [[]];
   }
-  if (norm.startsWith('SELECT id FROM type::thing')) {
+  if (norm.startsWith('SELECT id FROM type::record')) {
     const ref = String(params?.id || '');
     if (ref.startsWith('organizations:') && DB.organizations.has(ref)) return [[{ id: ref }]];
     if (ref.startsWith('accounts:') && DB.accounts.has(ref)) return [[{ id: ref }]];
@@ -81,15 +81,15 @@ async function fakeQuery(sql: string, params?: Record<string, any>): Promise<any
     const id = `users:user_${userIdCounter}`;
     const row = {
       id, email: params?.email, name: params?.name,
-      password_hash: params?.password_hash, default_org_id: params?.org_id,
+      password_hash: params?.password_hash, org_id: params?.org_id,
     };
     DB.users.set(String(params?.email || '').toLowerCase(), row);
     DB.userById.set(id, row);
     return [[row]];
   }
-  if (norm.startsWith('CREATE type::thing')) {
+  if (norm.startsWith('CREATE type::record')) {
     const id = String(params?.id || '');
-    const row = { id, name: params?.name, tier: 'free' };
+    const row = { id, name: params?.name };
     if (id.startsWith('organizations:')) DB.organizations.set(id, row);
     else if (id.startsWith('accounts:')) DB.accounts.set(id, row);
     return [[row]];
@@ -114,7 +114,7 @@ async function seedUser(email: string, password: string, role: 'owner' | 'admin'
   const acctRef = 'accounts:metabob';
   const row = {
     id: userId, email: email.toLowerCase(), name: email,
-    password_hash: await hashPassword(password), default_org_id: orgRef,
+    password_hash: await hashPassword(password), org_id: orgRef,
   };
   DB.users.set(email.toLowerCase(), row);
   DB.userById.set(userId, row);
@@ -206,7 +206,7 @@ describe('loginWithPassword', () => {
   test('user with null password_hash → 401 (no info leak)', async () => {
     DB.users.set('legacy@metabob.com', {
       id: 'users:legacy', email: 'legacy@metabob.com',
-      password_hash: null, default_org_id: 'organizations:metabob',
+      password_hash: null, org_id: 'organizations:metabob',
     });
     const r = await loginWithPassword({ email: 'legacy@metabob.com', password: 'AnyPassword9!' });
     ensureFailure(r); expect(r.status).toBe(401); expect(r.body.error).toBe('INVALID_CREDENTIALS');
@@ -218,7 +218,7 @@ describe('loginWithPassword', () => {
     const row = {
       id: userId, email: 'noacct@metabob.com',
       password_hash: await hashPassword('Pwd12345!'),
-      default_org_id: 'organizations:metabob',
+      org_id: 'organizations:metabob',
     };
     DB.users.set('noacct@metabob.com', row);
     DB.userById.set(userId, row);
