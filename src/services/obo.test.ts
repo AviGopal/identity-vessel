@@ -19,8 +19,10 @@ mock.module('../db/redis', () => ({
   getRateLimitKey: (endpoint: string, ip: string) => `ratelimit:${endpoint}:${ip}`,
   checkRateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }),
 }));
+// The key rows identity's validation reads (owner_kind among them); [] unless a test sets them.
+let keyRows: any[] = [];
 mock.module('../db/surrealdb', () => ({
-  query: async () => [],
+  query: async () => keyRows,
   getSurrealDB: async () => { throw new Error('SurrealDB stubbed in obo test'); },
 }));
 
@@ -137,5 +139,31 @@ describe('validating an OBO token', () => {
     expect((await verifyToken(r.token)).valid).toBe(false);
     const admin = await authorizeAdmin(`Bearer ${r.token}`);
     expect(admin.ok).toBe(false);
+  });
+});
+
+describe("the caller's key class travels in the token", () => {
+  const aud = { node: 'node-a', shape: 'fixtureRead' };
+  const validate = async (token: string) =>
+    resolveAuthentication({ type: 'authentication', pointer: { type: 'session', token } } as any, aud);
+
+  test('[MUST-FAIL] a key identity marks as a person\'s mints a token a validator reads as a person\'s', async () => {
+    keyRows = [{ scopes: ['read', 'write'], name: 'fixture-person', owner_kind: 'person' }];
+    try {
+      const r = await mint();
+      expect((decode(r.token).payload as any).owner_kind).toBe('person');
+      const v = await validate(r.token);
+      expect(v.authenticated).toBe(true);
+      expect(v.ownerKind).toBe('person');
+    } finally { keyRows = []; }
+  });
+
+  test('a key identity marks otherwise is never read as a person\'s through its token', async () => {
+    keyRows = [{ scopes: ['read', 'write'], name: 'fixture-agent', owner_kind: 'operator' }];
+    try {
+      const v = await validate((await mint()).token);
+      expect(v.authenticated).toBe(true);
+      expect(v.ownerKind).not.toBe('person');
+    } finally { keyRows = []; }
   });
 });

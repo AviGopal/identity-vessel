@@ -118,6 +118,7 @@ async function resolveJWT(token: string, audience?: OboAudience | null): Promise
         orgId: payload.org_id as string,
         userId: (payload.user_id ?? payload.sub) as string,
         keyId: payload.caller_key_id as string | undefined,
+        ...(typeof payload.owner_kind === 'string' ? { ownerKind: payload.owner_kind } : {}),
         type: 'session',
         scopes: Array.isArray(payload.scopes) ? payload.scopes : ['read'],
         obo: { node, shape: String(payload.obo_shape ?? ''), actor_key_id: payload.act?.key_id, expires_at: new Date(Number(payload.exp) * 1000).toISOString() },

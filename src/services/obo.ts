@@ -49,6 +49,8 @@ export interface CallerIdentity {
   key_id?: string;
   type: 'api_key' | 'session';
   scopes: string[];
+  /** The key's class as identity marks it (person, operator, …); a session caller has none. */
+  owner_kind?: string;
 }
 
 export type OboFailure = { ok: false; status: number; code: string; message: string };
@@ -118,7 +120,8 @@ async function identityOf(header: string, role: 'actor' | 'caller'): Promise<Cal
     const v = await validateKey(header.slice('ApiKey '.length));
     if (!v.valid || !v.orgId || !v.userId) return fail(status, code, `${role} credential is not valid`);
     if (v.keyId && (await isKeyRevoked(v.keyId))) return fail(status, code, `${role} credential is revoked`);
-    return { org_id: v.orgId, user_id: v.userId, key_id: v.keyId, type: 'api_key', scopes: v.scopes ?? ['read', 'write'] };
+    return { org_id: v.orgId, user_id: v.userId, key_id: v.keyId, type: 'api_key', scopes: v.scopes ?? ['read', 'write'],
+      ...(typeof v.ownerKind === 'string' ? { owner_kind: v.ownerKind } : {}) };
   }
   if (header.startsWith('Bearer ')) {
     // An actor is a service: it presents its own key. Accepting a bearer here would
@@ -190,6 +193,9 @@ export async function mintOnBehalfOf(
     project_ids: [] as string[],
     caller_key_id: caller.key_id,
     caller_type: caller.type,
+    // The caller key's class as identity marks it, frozen for the token's short life, so a node's records stamps a
+    // person's row only for a key identity marks as a person's. A session caller carries none: it is not a marked key.
+    ...(caller.owner_kind !== undefined ? { owner_kind: caller.owner_kind } : {}),
     act: { sub: actor.user_id, key_id: actor.key_id },
   };
   const token = await sign(payload, JWT_SECRET, 'HS512');
