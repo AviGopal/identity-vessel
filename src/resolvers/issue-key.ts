@@ -270,7 +270,7 @@ export async function mintApiKey(body: unknown): Promise<IssueKeyResult> {
  * issue path passes the class ownerKindAtIssue admits; the person-key mint (person-key.ts) passes 'person' for a key it
  * mints under a person's own sign-in session. Never reachable from the network with a class of the caller's choosing.
  */
-export async function persistKey(validated: IssueKeyRequest, ownerKind: OwnerKind): Promise<IssueKeyResult> {
+export async function persistKey(validated: IssueKeyRequest, ownerKind: OwnerKind, mintedFrom?: string): Promise<IssueKeyResult> {
   const scopes = validated.scopes ?? ['read', 'write'];
 
   const generated = generateApiKey(validated.org_id, validated.user_id, {
@@ -304,6 +304,8 @@ export async function persistKey(validated: IssueKeyRequest, ownerKind: OwnerKin
         owner_kind = $owner_kind${
           validated.owner_node ? ',\n        owner_node = $owner_node' : ''
         }${
+          mintedFrom ? ',\n        minted_from = $minted_from,\n        minted_at = time::now()' : ''
+        }${
           validated.name ? ',\n        name = $name' : ''
         }${
           generated.expiresAt ? ',\n        expires_at = <datetime>$expires_at' : ''
@@ -319,6 +321,7 @@ export async function persistKey(validated: IssueKeyRequest, ownerKind: OwnerKin
   };
   if (validated.owner_node) params.owner_node = validated.owner_node;
   if (validated.name) params.name = validated.name;
+  if (mintedFrom) params.minted_from = mintedFrom;
   if (generated.expiresAt) params.expires_at = generated.expiresAt;
 
   // The row must be there before the key is handed out. A key validates by its signature alone, with default scopes,

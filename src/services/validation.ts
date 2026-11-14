@@ -263,7 +263,7 @@ async function lookupKeyRow(keyId: string, orgId: string | null | undefined): Pr
     const query = await getQueryFn();
 
     // The one row for this id (services/key-row.ts), as apiKey_write finds it: none, or more than one, reads as no row.
-    const found = await findKeyRow(query, keyId, 'id, key_id, scopes, name, owner_kind');
+    const found = await findKeyRow(query, keyId, 'id, key_id, scopes, name, owner_kind, minted_from');
     if (!('row' in found)) {
       recordKeyAnswer({ branch: 'hmac', keyId, orgId, foundBy: 'ambiguous' in found ? 'ambiguous' : 'badId' in found ? 'bad_id' : 'none', answered: undefined });
       return { scopes: null, name: null };

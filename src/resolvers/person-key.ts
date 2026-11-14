@@ -19,6 +19,9 @@
  * surface could mint a person key the same way; no check here tells a person from an agent using the surface. The
  * agent side is held by the operator guard, which refuses agent calls to these routes.
  *
+ * The per-token count is held in this process: a token presented at two identities that share a signing secret could
+ * mint once at each, within its five minutes. Both rows name the same minted_from, so it shows.
+ *
  * PERSON_SESSION_SECONDS and PERSON_KEYS_PER_TOKEN are auth limits held as constants, the same law-1 debt as the other
  * credential limits: their home is an owner-role row read at use time.
  */
@@ -95,17 +98,20 @@ export async function issuePersonKey(authHeader: string | undefined): Promise<Is
     return no(401, 'INVALID_JWT', safeJwtErrorMessage(err));
   }
   if (!isPersonSessionPayload(p)) return no(403, 'FORBIDDEN', 'A person key is minted only under a person session token');
-  const user = p.user_id, org = p.org_id, jti = p.jti, exp = p.exp;
-  if (typeof user !== 'string' || typeof org !== 'string' || typeof jti !== 'string' || typeof exp !== 'number') {
+  const user = p.user_id, org = p.org_id, jti = p.jti, exp = p.exp, from = p.key_id;
+  if (typeof user !== 'string' || typeof org !== 'string' || typeof jti !== 'string' || typeof exp !== 'number' || typeof from !== 'string') {
     return no(403, 'FORBIDDEN', 'The person session token names no person');
   }
   const now = Math.floor(Date.now() / 1000);
   for (const [k, s] of spent) if (s.exp <= now) spent.delete(k);
   const used = spent.get(jti)?.count ?? 0;
-  if (used >= PERSON_KEYS_PER_TOKEN) return no(429, 'FORBIDDEN', 'This sign-in has already made its key; sign in again to make another');
+  if (used >= PERSON_KEYS_PER_TOKEN) return no(429, 'ALREADY_MINTED', 'This sign-in has already made its key; sign in again to make another');
   spent.set(jti, { count: used + 1, exp });
 
-  const made = await persistKey({ user_id: user, org_id: org, scopes: ['read', 'write'], name: PERSON_KEY_NAME }, 'person');
+  // The new row names the key the person signed in with (minted_from) and when, so every person key is traced to the
+  // sign-in that made it. A mint that made no row gives the token's share back.
+  const made = await persistKey({ user_id: user, org_id: org, scopes: ['read', 'write'], name: PERSON_KEY_NAME }, 'person', from);
   if (made.ok) console.log('[PersonKey] a person key was made under a person session'); // never the key or its id
+  else spent.set(jti, { count: used, exp });
   return made;
 }

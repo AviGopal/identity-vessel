@@ -27,6 +27,9 @@ import { generateToken, verifyToken } from '../services/jwt';
 import { resolveAuthentication } from './auth';
 import { mintOnBehalfOf } from '../services/obo';
 import { createdRow } from '../db/created-row.test-helper';
+import { readKeyClass, setQueryFn as setClassQueryFn } from './key-class';
+import { validateKey } from '../services/validation';
+import { __resetAnswerLogForTests, heldAnswers } from '../services/answer-log';
 
 const ORG = 'organizations:alpha';
 const USER = 'users:one';
@@ -84,12 +87,50 @@ describe('a person makes their own key', () => {
     expect(all).not.toContain(token);
   });
 
-  test('MUST-FAIL: one key per sign-in token', async () => {
+  test('MUST-FAIL: one key per sign-in token, refused as ALREADY_MINTED', async () => {
     const token = await session();
     expect((await issuePersonKey(`Bearer ${token}`)).ok).toBe(true);
     const again = await issuePersonKey(`Bearer ${token}`);
     expect(again.ok).toBe(false);
+    expect((again as { code?: string }).code).toBe('ALREADY_MINTED');
     expect(statements).toHaveLength(1);
+  });
+
+  test('MUST-FAIL: the new row names the key the person signed in with, and when', async () => {
+    const k = signIn();
+    const r = await issuePersonSession(`ApiKey ${k.key}`);
+    if (!r.ok) throw new Error('no session');
+    const made = await issuePersonKey(`Bearer ${r.token}`);
+    expect(made.ok).toBe(true);
+    expect(createdRowParams().minted_from).toBe(k.keyId);
+    expect(statements[0]).toContain('minted_from = $minted_from');
+    expect(statements[0]).toContain('minted_at = time::now()');
+  });
+
+  test('a mint that made no row gives the token its share back', async () => {
+    const token = await session();
+    setIssueQueryFn(async (sql) => { statements.push(sql); return []; });
+    expect((await issuePersonKey(`Bearer ${token}`)).ok).toBe(false);
+    setIssueQueryFn(async (sql, params) => { statements.push(sql); lastParams = { ...(params ?? {}) }; return createdRow(sql, params); });
+    expect((await issuePersonKey(`Bearer ${token}`)).ok).toBe(true);
+  });
+
+  test("MUST-FAIL: the listing and keyAnswer show a made key's source, and only a made key's", async () => {
+    __resetAnswerLogForTests();
+    const reader = signIn();
+    const k = signIn();
+    const minted = { id: 'api_key:mintedrw', key_id: 'key_mintedkeyvalue01', org_id: ORG, name: 'person-key', scopes: ['read', 'write'], owner_kind: 'person', minted_from: k.keyId };
+    const plain = { id: 'api_key:plainrow', key_id: 'key_plainkeyvalue001', org_id: ORG, name: 'my laptop', scopes: ['read', 'write'], owner_kind: 'unclassified' };
+    setClassQueryFn(async () => [minted, plain]);
+    const listed = await readKeyClass(`ApiKey ${reader.key}`);
+    setClassQueryFn(null);
+    if (!listed.ok) throw new Error('listing refused');
+    expect(listed.keys.find((e) => e.key_id_mask12 === 'key_mintedke')?.minted_from_mask12).toBe(k.keyId.slice(0, 12));
+    expect('minted_from_mask12' in listed.keys.find((e) => e.key_id_mask12 === 'key_plainkey')!).toBe(false);
+    const p = generateApiKey(ORG, USER, {});
+    sourceRow = { id: 'api_key:mintedrw', name: 'person-key', scopes: ['read', 'write'], owner_kind: 'person', minted_from: k.keyId };
+    await validateKey(p.key);
+    expect(heldAnswers(ORG).find((h) => h.kind === 'key' && h.key_mask12 === p.keyId.slice(0, 12))).toMatchObject({ minted_from_mask12: k.keyId.slice(0, 12), answered: 'person' });
   });
 });
 
