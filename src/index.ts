@@ -89,7 +89,6 @@ import { issueApiKey, authorizeAdmin, bindKeyTarget, isIssueKeyFailure } from '.
 import { grantKeyScopes, API_KEY_WRITE_SHAPE } from './resolvers/grant-scope';
 import { readKeyClass, API_KEY_CLASS_SHAPE } from './resolvers/key-class';
 import { readKeyAnswer, KEY_ANSWER_SHAPE } from './resolvers/key-answer';
-import { issuePersonSession, issuePersonKey, PERSON_SESSION_SHAPE, PERSON_KEY_SHAPE } from './resolvers/person-key';
 import { bootstrapAdminKey } from './resolvers/bootstrap-admin';
 import { loginWithPassword, signupWithPassword } from './resolvers/login';
 import { z } from 'zod';
@@ -188,18 +187,6 @@ app.get('/capabilities', (c) => {
       {
         type: 'apiKeyClass',
         description: "Service-key read: each of the caller org's keys by a 12-character id mask, with its owner_kind, owner_node and is_admin",
-        avgLatency: 5,
-        cost: 0.0001
-      },
-      {
-        type: 'personSession',
-        description: "A person's sign-in: a short-lived token from the ApiKey the person signed in with, accepted only by personKey_issue",
-        avgLatency: 5,
-        cost: 0.0001
-      },
-      {
-        type: 'personKey_issue',
-        description: "A person makes their own key: a new read/write key stamped person, under a personSession token only, returned once",
         avgLatency: 5,
         cost: 0.0001
       },
@@ -338,16 +325,6 @@ app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 100, buck
       }
       const { ok: _ok, ...data } = read;
       return c.json({ success: true, data });
-    }
-
-    // Branches 0d/0e: a person's sign-in token and the key a person makes under it. See resolvers/person-key.ts.
-    for (const [shape, run] of [[PERSON_SESSION_SHAPE, issuePersonSession], [PERSON_KEY_SHAPE, issuePersonKey]] as const) {
-      if (body?.impulse?.pointer?.type === shape && (body.impulse.type === undefined || body.impulse.type === shape)) {
-        const r: any = await run(c.req.header('Authorization'));
-        if (!r.ok) return c.json({ success: false, error: { code: r.code, message: r.message } }, r.status as any);
-        const { ok: _ok, ...data } = r;
-        return c.json({ success: true, data });
-      }
     }
 
     // Branch 1: nested impulse form — body has an `impulse` field.

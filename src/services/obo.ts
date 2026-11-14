@@ -31,7 +31,6 @@ import { validateKey } from './validation';
 import { isKeyRevoked } from '../db/redis';
 import { safeJwtErrorMessage } from './redact';
 import { recordOboMint } from './answer-log';
-import { isPersonSessionPayload } from './jwt';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 const JWT_ISSUER = process.env.JWT_ISSUER || 'https://identity.metabob.com';
@@ -134,9 +133,6 @@ async function identityOf(header: string, role: 'actor' | 'caller'): Promise<Cal
       payload = await verify(header.slice('Bearer '.length), JWT_SECRET, 'HS512');
     } catch (err) {
       return fail(status, code, `caller token is not valid (${safeJwtErrorMessage(err)})`);
-    }
-    if (isPersonSessionPayload(payload)) {
-      return fail(status, code, 'a person session token is accepted only by the person-key mint');
     }
     if (isOboPayload(payload)) {
       // NO RE-DELEGATION. An OBO token presented as a caller credential is exactly the

@@ -23,7 +23,6 @@ import { traceAuthentication } from '../services/trace';
 import { safeJwtErrorMessage } from '../services/redact';
 import { verify } from 'hono/jwt';
 import { isOboPayload, oboAudienceMatches, type OboAudience } from '../services/obo';
-import { isPersonSessionPayload } from '../services/jwt';
 import {
   UserVesselClient,
   pickDefaultAccount,
@@ -102,9 +101,6 @@ async function resolveJWT(token: string, audience?: OboAudience | null): Promise
     // generateToken() emits snake_case claims (org_id, user_id, account_id)
     // per the canonical JWT shape; legacy callers may have used camelCase, so
     // accept both forms.
-    if (isPersonSessionPayload(payload)) {
-      return { authenticated: false, reason: 'a person session token is accepted only by the person-key mint' };
-    }
     if (isOboPayload(payload)) {
       // A federation on-behalf-of token. It names the CALLER (so the consumer authorizes
       // the real caller, never the ingress that obtained it) and is bound to one node

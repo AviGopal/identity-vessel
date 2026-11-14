@@ -18,7 +18,6 @@ import { safeJwtErrorMessage } from '../services/redact';
 import { createHash } from 'crypto';
 import { ownerKindAtIssue, isNodeName, type OwnerKind } from '../services/owner-kind';
 import { rowsOf } from '../services/key-row';
-import { isPersonSessionPayload } from '../services/jwt';
 
 type QueryFn = (sql: string, params?: Record<string, any>) => Promise<any>;
 let queryOverride: QueryFn | null = null;
@@ -126,7 +125,6 @@ export async function authorizeAdmin(
       return fail(401, 'INVALID_JWT', safeJwtErrorMessage(err));
     }
     if (payload?.typ === 'obo') return fail(403, 'FORBIDDEN', 'An on-behalf-of token cannot authorize administration');
-    if (isPersonSessionPayload(payload)) return fail(403, 'FORBIDDEN', 'A person session token cannot authorize administration');
     const role = (payload?.role as string | undefined) ?? '';
     if (role !== 'admin' && role !== 'owner') return fail(403, 'FORBIDDEN', 'JWT role is not admin');
     return { ok: true, org_id: payload?.org_id, user_id: payload?.user_id ?? payload?.sub, is_admin: true };
@@ -261,16 +259,7 @@ export async function issueApiKey(
 export async function mintApiKey(body: unknown): Promise<IssueKeyResult> {
   const validated = validateInput(body);
   if ('status' in validated) return validated;
-  // validateInput refused every declaration ownerKindAtIssue does not admit.
-  return persistKey(validated, ownerKindAtIssue(validated.name, validated.owner_kind) as OwnerKind);
-}
 
-/**
- * Generate a key for a validated request and persist its row with the class given. The one minting body: the admin
- * issue path passes the class ownerKindAtIssue admits; the person-key mint (person-key.ts) passes 'person' for a key it
- * mints under a person's own sign-in session. Never reachable from the network with a class of the caller's choosing.
- */
-export async function persistKey(validated: IssueKeyRequest, ownerKind: OwnerKind, mintedFrom?: string): Promise<IssueKeyResult> {
   const scopes = validated.scopes ?? ['read', 'write'];
 
   const generated = generateApiKey(validated.org_id, validated.user_id, {
@@ -280,6 +269,8 @@ export async function persistKey(validated: IssueKeyRequest, ownerKind: OwnerKin
   });
 
   const keyHash = createHash('sha256').update(generated.key).digest('hex');
+  // validateInput refused every declaration ownerKindAtIssue does not admit.
+  const ownerKind = ownerKindAtIssue(validated.name, validated.owner_kind) as OwnerKind;
 
   // SurrealDB 3.x renamed `type::thing` → `type::record`; we avoid the helper
   // entirely and use the auto-generated id, persisting the HMAC-embedded keyId
@@ -304,8 +295,6 @@ export async function persistKey(validated: IssueKeyRequest, ownerKind: OwnerKin
         owner_kind = $owner_kind${
           validated.owner_node ? ',\n        owner_node = $owner_node' : ''
         }${
-          mintedFrom ? ',\n        minted_from = $minted_from,\n        minted_at = time::now()' : ''
-        }${
           validated.name ? ',\n        name = $name' : ''
         }${
           generated.expiresAt ? ',\n        expires_at = <datetime>$expires_at' : ''
@@ -321,7 +310,6 @@ export async function persistKey(validated: IssueKeyRequest, ownerKind: OwnerKin
   };
   if (validated.owner_node) params.owner_node = validated.owner_node;
   if (validated.name) params.name = validated.name;
-  if (mintedFrom) params.minted_from = mintedFrom;
   if (generated.expiresAt) params.expires_at = generated.expiresAt;
 
   // The row must be there before the key is handed out. A key validates by its signature alone, with default scopes,

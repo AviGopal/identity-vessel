@@ -38,8 +38,6 @@ export type HeldKeyAnswer = {
   row_mask8: string;
   stored: string;
   answered: string;
-  /** For a key a person made: the first 12 characters of the key it was made under. */
-  minted_from_mask12?: string;
   at: string;
 };
 export type HeldOboMint = {
@@ -104,7 +102,6 @@ export function recordKeyAnswer(a: {
     row_mask8: head(recordIdOf(a.row), 8),
     stored: a.row ? storedOf(a.row.owner_kind) : '-',
     answered: head(a.answered, 16) === '-' ? 'none' : head(a.answered, 16),
-    ...(a.row && typeof a.row.minted_from === 'string' && a.row.minted_from !== '' ? { minted_from_mask12: head(a.row.minted_from, 12) } : {}),
     at: new Date().toISOString(),
   };
   keyAnswers.set(`key ${a.branch} ${a.keyId ?? '-'}`, { org: a.orgId, answer });

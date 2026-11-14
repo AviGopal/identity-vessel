@@ -61,8 +61,6 @@ export interface KeyClassEntry {
   /** The first 8 characters of the row's record id: the same mask keyAnswer holds for the row validation read, so a
    *  reader can see that a listed class and an answered class come from the same row. */
   row_mask8: string;
-  /** For a key a person made (person-key.ts): the first 12 characters of the key it was made under. Absent otherwise. */
-  minted_from_mask12?: string;
   owner_kind: OwnerKind;
   owner_node: string | null;
   is_admin: boolean;
@@ -106,7 +104,6 @@ export function entryFromRow(row: Record<string, unknown>, node: string | null):
     owner_kind,
     owner_node: owner_kind === 'system' ? node : owner_kind === 'peer' ? peerNode(row.owner_node) : null,
     is_admin: scopes.includes('admin'),
-    ...(typeof row.minted_from === 'string' && row.minted_from !== '' ? { minted_from_mask12: row.minted_from.slice(0, 12).replace(/[^A-Za-z0-9_:-]/g, '?') } : {}),
   };
 }
 
@@ -143,7 +140,7 @@ export async function readKeyClass(authHeader: string | undefined): Promise<KeyC
   try {
     const query = await getQueryFn();
     // Never key_hash: the read selects only what the class is derived from.
-    rows = await query('SELECT id, key_id, name, scopes, owner_kind, owner_node, minted_from FROM api_key WHERE org_id = $org_id;', { org_id: caller.orgId });
+    rows = await query('SELECT id, key_id, name, scopes, owner_kind, owner_node FROM api_key WHERE org_id = $org_id;', { org_id: caller.orgId });
   } catch {
     return fail(500, 'READ_FAILED', 'Could not read the key class map');
   }
