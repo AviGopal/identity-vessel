@@ -179,10 +179,20 @@ export async function generateToken(options: GenerateTokenOptions): Promise<Gene
  * @param token - JWT token string
  * @returns Verification result with claims if valid
  */
+/** The type of a person-session token (resolvers/person-key.ts): accepted only by the person-key mint, refused here. */
+export const PERSON_SESSION_TYP = 'person_session';
+/** True when a decoded JWT payload is a person-session token. */
+export function isPersonSessionPayload(payload: unknown): boolean {
+  return !!payload && typeof payload === 'object' && (payload as { typ?: unknown }).typ === PERSON_SESSION_TYP;
+}
+
 export async function verifyToken(token: string, opts: VerifyTokenOptions = {}): Promise<VerifyTokenResult> {
   try {
     const payload = await verify(token, JWT_SECRET, 'HS512') as JWTPayload & Partial<MetabobJWTClaims>;
 
+    if (isPersonSessionPayload(payload)) {
+      return { valid: false, error: 'A person session token is accepted only by the person-key mint' };
+    }
     if ((payload as any).typ === 'obo') {
       if (!opts.allowObo) {
         return { valid: false, error: 'An on-behalf-of token is not accepted here' };
