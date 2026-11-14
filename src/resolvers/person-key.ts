@@ -102,6 +102,8 @@ export async function issuePersonKey(authHeader: string | undefined): Promise<Is
   if (typeof user !== 'string' || typeof org !== 'string' || typeof jti !== 'string' || typeof exp !== 'number' || typeof from !== 'string') {
     return no(403, 'FORBIDDEN', 'The person session token names no person');
   }
+  // The key the person signed in with, revoked since the token was minted, mints nothing.
+  if (await isKeyRevoked(from)) return no(401, 'REVOKED_API_KEY', 'The key this sign-in came from has been revoked');
   const now = Math.floor(Date.now() / 1000);
   for (const [k, s] of spent) if (s.exp <= now) spent.delete(k);
   const used = spent.get(jti)?.count ?? 0;

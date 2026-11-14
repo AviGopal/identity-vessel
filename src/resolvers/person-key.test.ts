@@ -5,9 +5,10 @@
  */
 import { test, expect, describe, beforeEach, afterEach, mock, spyOn } from 'bun:test';
 
+const revoked = new Set<string>();
 mock.module('../db/redis', () => ({
   redis: {},
-  isKeyRevoked: async () => false,
+  isKeyRevoked: async (id: string) => revoked.has(id),
   revokeKey: async () => {},
   unrevokeKey: async () => {},
   getRateLimitKey: (endpoint: string, ip: string) => `ratelimit:${endpoint}:${ip}`,
@@ -40,6 +41,7 @@ let logged: string[] = [];
 let spy: ReturnType<typeof spyOn>;
 
 beforeEach(() => {
+  revoked.clear();
   __resetPersonKeyForTests();
   statements = [];
   logged = [];
@@ -191,6 +193,31 @@ describe('a sign-in token is a person\'s only', () => {
     const payload = JSON.parse(Buffer.from(r.token.split('.')[1], 'base64url').toString());
     expect(payload).toMatchObject({ typ: PERSON_SESSION_TYP, user_id: USER, org_id: ORG, key_id: k.keyId });
     expect(payload.exp - payload.iat).toBeLessThanOrEqual(300);
+  });
+});
+
+describe('a revoked key makes nothing', () => {
+  test('MUST-FAIL: a revoked key gets no person session, and so no key', async () => {
+    const k = signIn();
+    revoked.add(k.keyId);
+    const r = await issuePersonSession(`ApiKey ${k.key}`);
+    expect(r.ok).toBe(false);
+    expect(statements).toEqual([]);
+  });
+
+  test('MUST-FAIL: a key revoked after its sign-in token was minted cannot mint under it', async () => {
+    const k = signIn();
+    const r = await issuePersonSession(`ApiKey ${k.key}`);
+    if (!r.ok) throw new Error('no session');
+    revoked.add(k.keyId);
+    const made = await issuePersonKey(`Bearer ${r.token}`);
+    expect(made.ok).toBe(false);
+    expect(statements).toEqual([]);
+  });
+
+  test('MUST-FAIL: a Bearer token (an on-behalf-of or a person session) gets no person session', async () => {
+    const token = await session();
+    expect((await issuePersonSession(`Bearer ${token}`)).ok).toBe(false);
   });
 });
 
