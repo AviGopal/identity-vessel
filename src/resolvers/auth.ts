@@ -15,6 +15,7 @@
  */
 
 import { storedOrDerived } from '../services/owner-kind';
+import { logKeyAnswer } from '../services/answer-log';
 import type { AuthenticationImpulse, AuthenticationResult } from '../types';
 import { validateKey } from '../services/validation';
 import { isKeyRevoked } from '../db/redis';
@@ -159,8 +160,12 @@ async function resolveAPIKeyLegacy(apiKey: string): Promise<AuthenticationResult
       { kp: apiKey },
     );
     const row = Array.isArray(rows) ? rows[0] : undefined;
-    if (!row || !row.is_active) return null;
+    // Never the presented value in the line: on this branch it is the key itself. The row's stable id names it.
+    if (!row) { logKeyAnswer({ branch: 'legacy', keyId: null, foundBy: 'none', answered: undefined }); return null; }
     const stableId: string = row.key_id ?? String(row.id ?? '').replace(/^api_key:/, '');
+    if (!row.is_active) { logKeyAnswer({ branch: 'legacy', keyId: stableId, foundBy: 'key_prefix', row, answered: 'inactive' }); return null; }
+    const ownerKind = storedOrDerived(row.owner_kind, row.name);
+    logKeyAnswer({ branch: 'legacy', keyId: stableId, foundBy: 'key_prefix', row, answered: ownerKind });
     return {
       authenticated: true,
       orgId: row.org_id,
@@ -169,9 +174,10 @@ async function resolveAPIKeyLegacy(apiKey: string): Promise<AuthenticationResult
       type: 'api_key',
       scopes: Array.isArray(row.scopes) ? row.scopes : ['read', 'write'],
       name: typeof row.name === 'string' ? row.name : null,
-      ownerKind: storedOrDerived(row.owner_kind, row.name),
+      ownerKind,
     };
   } catch {
+    logKeyAnswer({ branch: 'legacy', keyId: null, foundBy: 'error', answered: undefined });
     return null;
   }
 }

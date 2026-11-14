@@ -36,7 +36,7 @@ function probe(): Result {
         checkRateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }),
       }));
       mock.module(${src('db/surrealdb.ts')}, () => ({
-        query: async (sql) => (/SELECT scopes, name(, owner_kind)? FROM api_key/.test(sql) ? [{ scopes: ['read'] }] : []),
+        query: async (sql) => (/SELECT (id, key_id, )?scopes, name(, owner_kind)? FROM api_key/.test(sql) ? [{ scopes: ['read'] }] : []),
         getSurrealDB: async () => ({ query: async () => [] }),
       }));
       mock.module(${src('db/migrations.ts')}, () => ({ migrateOnStart: async () => ({}) }));

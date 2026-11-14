@@ -30,6 +30,7 @@ import { sign, verify } from 'hono/jwt';
 import { validateKey } from './validation';
 import { isKeyRevoked } from '../db/redis';
 import { safeJwtErrorMessage } from './redact';
+import { logOboMint } from './answer-log';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 const JWT_ISSUER = process.env.JWT_ISSUER || 'https://identity.metabob.com';
@@ -173,6 +174,7 @@ export async function mintOnBehalfOf(
   }
   const caller = await identityOf(callerHeader, 'caller');
   if ('ok' in caller) return caller;
+  logOboMint({ scheme: caller.type, keyId: caller.key_id, ownerKind: caller.owner_kind, node: a.node, shape: a.shape });
 
   const ttl = Math.max(1, Math.min(MAX_TTL_SECONDS, Number(ttlSeconds) > 0 ? Number(ttlSeconds) : DEFAULT_TTL_SECONDS));
   const now = Math.floor(Date.now() / 1000);

@@ -14,6 +14,7 @@
  */
 
 import { storedOrDerived } from './owner-kind';
+import { foundByOf, logKeyAnswer } from './answer-log';
 import { findKeyRow } from './key-row';
 import { createHmac, timingSafeEqual } from 'crypto';
 import type { ApiKeyComponents, ValidationResult } from '../types';
@@ -262,14 +263,16 @@ async function lookupKeyRow(keyId: string): Promise<{ scopes: string[] | null; n
     const query = await getQueryFn();
 
     // The one row for this id (services/key-row.ts), as apiKey_write finds it: none, or more than one, reads as no row.
-    const found = await findKeyRow(query, keyId, 'scopes, name, owner_kind');
+    const found = await findKeyRow(query, keyId, 'id, key_id, scopes, name, owner_kind');
     if (!('row' in found)) {
+      logKeyAnswer({ branch: 'hmac', keyId, foundBy: 'ambiguous' in found ? 'ambiguous' : 'badId' in found ? 'bad_id' : 'none', answered: undefined });
       return { scopes: null, name: null };
     }
     const rows = [found.row];
 
     const name = typeof rows[0]?.name === 'string' ? rows[0].name : null;
     const ownerKind = storedOrDerived(rows[0]?.owner_kind, name);
+    logKeyAnswer({ branch: 'hmac', keyId, foundBy: foundByOf(found.row, keyId), row: found.row, answered: ownerKind });
     const scopes = rows[0]?.scopes;
     if (!Array.isArray(scopes) || scopes.length === 0) {
       return { scopes: null, name, ownerKind };
@@ -279,6 +282,7 @@ async function lookupKeyRow(keyId: string): Promise<{ scopes: string[] | null; n
     return { scopes: scopes.every((s) => typeof s === 'string') ? scopes : null, name, ownerKind };
   } catch (error) {
     // Graceful degradation: log once, return null so caller uses defaults.
+    logKeyAnswer({ branch: 'hmac', keyId, foundBy: 'error', answered: undefined });
     console.warn('[validation] lookupKeyScopes failed, falling back to defaults', {
       key_id: keyId,
       error: error instanceof Error ? error.message : String(error),
@@ -331,6 +335,7 @@ async function delegateValidation(apiKey: string, iss: string): Promise<Validati
         error: upstream ? redactCredential(upstream, apiKey) : 'Issuer rejected key',
       };
     }
+    logKeyAnswer({ branch: 'delegated', keyId: typeof data.key_id === 'string' ? data.key_id : null, foundBy: 'issuer', answered: undefined });
     return {
       valid: true,
       orgId: data.org_id,
