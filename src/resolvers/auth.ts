@@ -15,7 +15,7 @@
  */
 
 import { storedOrDerived } from '../services/owner-kind';
-import { logKeyAnswer } from '../services/answer-log';
+import { recordKeyAnswer } from '../services/answer-log';
 import type { AuthenticationImpulse, AuthenticationResult } from '../types';
 import { validateKey } from '../services/validation';
 import { isKeyRevoked } from '../db/redis';
@@ -160,12 +160,13 @@ async function resolveAPIKeyLegacy(apiKey: string): Promise<AuthenticationResult
       { kp: apiKey },
     );
     const row = Array.isArray(rows) ? rows[0] : undefined;
-    // Never the presented value in the line: on this branch it is the key itself. The row's stable id names it.
-    if (!row) { logKeyAnswer({ branch: 'legacy', keyId: null, foundBy: 'none', answered: undefined }); return null; }
+    // Never the presented value in what is held: on this branch it is the key itself. The row's stable id names it.
+    // A miss or a failed read has no org to hold it under (answer-log.ts).
+    if (!row) return null;
     const stableId: string = row.key_id ?? String(row.id ?? '').replace(/^api_key:/, '');
-    if (!row.is_active) { logKeyAnswer({ branch: 'legacy', keyId: stableId, foundBy: 'key_prefix', row, answered: 'inactive' }); return null; }
+    if (!row.is_active) { recordKeyAnswer({ branch: 'legacy', keyId: stableId, orgId: row.org_id, foundBy: 'key_prefix', row, answered: 'inactive' }); return null; }
     const ownerKind = storedOrDerived(row.owner_kind, row.name);
-    logKeyAnswer({ branch: 'legacy', keyId: stableId, foundBy: 'key_prefix', row, answered: ownerKind });
+    recordKeyAnswer({ branch: 'legacy', keyId: stableId, orgId: row.org_id, foundBy: 'key_prefix', row, answered: ownerKind });
     return {
       authenticated: true,
       orgId: row.org_id,
@@ -177,7 +178,6 @@ async function resolveAPIKeyLegacy(apiKey: string): Promise<AuthenticationResult
       ownerKind,
     };
   } catch {
-    logKeyAnswer({ branch: 'legacy', keyId: null, foundBy: 'error', answered: undefined });
     return null;
   }
 }

@@ -66,7 +66,7 @@ describe("a key declared 'peer' at issue, with its node", () => {
     expect(params?.owner_kind).toBe('peer');
     expect(params?.owner_node).toBe('node-a');
     const entry = entryFromRow(storedRow(params!), 'node-b');
-    expect(entry).toEqual({ key_id_mask12: String(params!.key_id).slice(0, 12), owner_kind: 'peer', owner_node: 'node-a', is_admin: false });
+    expect(entry).toEqual({ key_id_mask12: String(params!.key_id).slice(0, 12), row_mask8: '-', owner_kind: 'peer', owner_node: 'node-a', is_admin: false });
   });
 
   test("a key NAMED like a peer node, with no declaration, still reads 'unclassified' and carries no node", async () => {
@@ -115,7 +115,7 @@ describe("a key declared 'peer' at issue, with its node", () => {
 
   test('a stored peer row with no node is served with owner_node null', () => {
     expect(entryFromRow({ key_id: 'key_FIXTUREpeer0000F', owner_kind: 'peer', name: 'fixture-join-key' }, 'node-b'))
-      .toEqual({ key_id_mask12: 'key_FIXTUREp', owner_kind: 'peer', owner_node: null, is_admin: false });
+      .toEqual({ key_id_mask12: 'key_FIXTUREp', row_mask8: '-', owner_kind: 'peer', owner_node: null, is_admin: false });
   });
 
   test('migration 006 declares api_key.owner_node, ships after 005, and stamps no existing row', () => {

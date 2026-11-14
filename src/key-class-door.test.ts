@@ -111,14 +111,14 @@ describe('apiKeyClass on the resolve door', () => {
     expect(r.body.success).toBe(true);
     const keys = r.body.data.keys as Array<Record<string, unknown>>;
     expect(keys).toEqual([
-      { key_id_mask12: 'key_FIXTUREs', owner_kind: 'system', owner_node: 'fixture-node', is_admin: false },
-      { key_id_mask12: 'key_FIXTUREa', owner_kind: 'unclassified', owner_node: null, is_admin: true },
-      { key_id_mask12: 'key_FIXTUREf', owner_kind: 'unclassified', owner_node: null, is_admin: false },
-      { key_id_mask12: 'key_FIXTUREo', owner_kind: 'operator', owner_node: null, is_admin: false },
-      { key_id_mask12: 'key_FIXTUREp', owner_kind: 'peer', owner_node: 'node-a', is_admin: false },
+      { key_id_mask12: 'key_FIXTUREs', row_mask8: '-', owner_kind: 'system', owner_node: 'fixture-node', is_admin: false },
+      { key_id_mask12: 'key_FIXTUREa', row_mask8: '-', owner_kind: 'unclassified', owner_node: null, is_admin: true },
+      { key_id_mask12: 'key_FIXTUREf', row_mask8: '-', owner_kind: 'unclassified', owner_node: null, is_admin: false },
+      { key_id_mask12: 'key_FIXTUREo', row_mask8: '-', owner_kind: 'operator', owner_node: null, is_admin: false },
+      { key_id_mask12: 'key_FIXTUREp', row_mask8: '-', owner_kind: 'peer', owner_node: 'node-a', is_admin: false },
     ]);
     for (const k of keys) {
-      expect(Object.keys(k).sort()).toEqual(['is_admin', 'key_id_mask12', 'owner_kind', 'owner_node']);
+      expect(Object.keys(k).sort()).toEqual(['is_admin', 'key_id_mask12', 'owner_kind', 'owner_node', 'row_mask8']);
       expect((k.key_id_mask12 as string).length).toBe(12);
     }
     // The read is the caller's org only, and never selects the hash.

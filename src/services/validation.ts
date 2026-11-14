@@ -14,7 +14,7 @@
  */
 
 import { storedOrDerived } from './owner-kind';
-import { foundByOf, logKeyAnswer } from './answer-log';
+import { foundByOf, recordKeyAnswer } from './answer-log';
 import { findKeyRow } from './key-row';
 import { createHmac, timingSafeEqual } from 'crypto';
 import type { ApiKeyComponents, ValidationResult } from '../types';
@@ -248,7 +248,7 @@ export function validateKeyFormat(apiKey: string): ValidationResult {
  * legacy default.
  */
 export async function lookupKeyScopes(keyId: string): Promise<string[] | null> {
-  return (await lookupKeyRow(keyId)).scopes;
+  return (await lookupKeyRow(keyId, null)).scopes;
 }
 
 /**
@@ -256,7 +256,7 @@ export async function lookupKeyScopes(keyId: string): Promise<string[] | null> {
  * `name` (null when the row is missing or unnamed) so a consumer can attribute a
  * write by it. Only scopes and name are selected: never the key value or hash.
  */
-async function lookupKeyRow(keyId: string): Promise<{ scopes: string[] | null; name: string | null; ownerKind?: string }> {
+async function lookupKeyRow(keyId: string, orgId: string | null | undefined): Promise<{ scopes: string[] | null; name: string | null; ownerKind?: string }> {
   if (!keyId) return { scopes: null, name: null };
 
   try {
@@ -265,14 +265,14 @@ async function lookupKeyRow(keyId: string): Promise<{ scopes: string[] | null; n
     // The one row for this id (services/key-row.ts), as apiKey_write finds it: none, or more than one, reads as no row.
     const found = await findKeyRow(query, keyId, 'id, key_id, scopes, name, owner_kind');
     if (!('row' in found)) {
-      logKeyAnswer({ branch: 'hmac', keyId, foundBy: 'ambiguous' in found ? 'ambiguous' : 'badId' in found ? 'bad_id' : 'none', answered: undefined });
+      recordKeyAnswer({ branch: 'hmac', keyId, orgId, foundBy: 'ambiguous' in found ? 'ambiguous' : 'badId' in found ? 'bad_id' : 'none', answered: undefined });
       return { scopes: null, name: null };
     }
     const rows = [found.row];
 
     const name = typeof rows[0]?.name === 'string' ? rows[0].name : null;
     const ownerKind = storedOrDerived(rows[0]?.owner_kind, name);
-    logKeyAnswer({ branch: 'hmac', keyId, foundBy: foundByOf(found.row, keyId), row: found.row, answered: ownerKind });
+    recordKeyAnswer({ branch: 'hmac', keyId, orgId, foundBy: foundByOf(found.row, keyId), row: found.row, answered: ownerKind });
     const scopes = rows[0]?.scopes;
     if (!Array.isArray(scopes) || scopes.length === 0) {
       return { scopes: null, name, ownerKind };
@@ -282,7 +282,7 @@ async function lookupKeyRow(keyId: string): Promise<{ scopes: string[] | null; n
     return { scopes: scopes.every((s) => typeof s === 'string') ? scopes : null, name, ownerKind };
   } catch (error) {
     // Graceful degradation: log once, return null so caller uses defaults.
-    logKeyAnswer({ branch: 'hmac', keyId, foundBy: 'error', answered: undefined });
+    recordKeyAnswer({ branch: 'hmac', keyId, orgId, foundBy: 'error', answered: undefined });
     console.warn('[validation] lookupKeyScopes failed, falling back to defaults', {
       key_id: keyId,
       error: error instanceof Error ? error.message : String(error),
@@ -335,7 +335,7 @@ async function delegateValidation(apiKey: string, iss: string): Promise<Validati
         error: upstream ? redactCredential(upstream, apiKey) : 'Issuer rejected key',
       };
     }
-    logKeyAnswer({ branch: 'delegated', keyId: typeof data.key_id === 'string' ? data.key_id : null, foundBy: 'issuer', answered: undefined });
+    recordKeyAnswer({ branch: 'delegated', keyId: typeof data.key_id === 'string' ? data.key_id : null, orgId: data.org_id, foundBy: 'issuer', answered: undefined });
     return {
       valid: true,
       orgId: data.org_id,
@@ -368,7 +368,7 @@ export async function validateKey(apiKey: string): Promise<ValidationResult> {
   const result = validateKeyFormat(apiKey);
 
   if (result.valid && result.keyId) {
-    const { scopes, name, ownerKind } = await lookupKeyRow(result.keyId);
+    const { scopes, name, ownerKind } = await lookupKeyRow(result.keyId, result.orgId);
     const kind = ownerKind !== undefined ? { ownerKind } : {};
     return scopes !== null ? { ...result, scopes, name, ...kind } : { ...result, name, ...kind };
   }

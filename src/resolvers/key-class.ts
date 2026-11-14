@@ -4,8 +4,10 @@
  *
  * Served on identity's resolve door (POST /v1/auth/resolve, pointer.type 'apiKeyClass'),
  * advertised to discovery like identity's other shapes. The answer is
- *   { success: true, data: { keys: [{ key_id_mask12, owner_kind, owner_node, is_admin }] } }
+ *   { success: true, data: { keys: [{ key_id_mask12, row_mask8, owner_kind, owner_node, is_admin }] } }
  * and nothing else per key: never the key, its hash, its full id, its name or its scopes.
+ *   - row_mask8: the first 8 characters of the row's record id, the row keyAnswer names for the key it answered,
+ *     so a listed class and an answered class can be seen to come from the same row (or not).
  *   - key_id_mask12: the first 12 characters of the key's key_id (a key_id is 'key_' plus 16
  *     characters, so this is a prefix, never the whole id). A reader matches a principal's key
  *     id by prefix. A row with no key_id string, or one shorter than 13 characters (whose mask
@@ -34,6 +36,7 @@
 import { validateKey } from '../services/validation';
 import { isKeyRevoked } from '../db/redis';
 import { storedOrDerived, type OwnerKind } from '../services/owner-kind';
+import { recordIdOf } from '../services/answer-log';
 
 export { deriveOwnerKind, ownerKindAtIssue, OWNER_KINDS, SYSTEM_KEY_NAMES, ADMIN_CREDENTIAL_NAMES, type OwnerKind } from '../services/owner-kind';
 
@@ -55,6 +58,9 @@ async function getQueryFn(): Promise<QueryFn> {
 
 export interface KeyClassEntry {
   key_id_mask12: string;
+  /** The first 8 characters of the row's record id: the same mask keyAnswer holds for the row validation read, so a
+   *  reader can see that a listed class and an answered class come from the same row. */
+  row_mask8: string;
   owner_kind: OwnerKind;
   owner_node: string | null;
   is_admin: boolean;
@@ -66,6 +72,7 @@ export type KeyClassFailureCode =
   | 'INVALID_API_KEY'
   | 'REVOKED_API_KEY'
   | 'FORBIDDEN'
+  | 'INVALID_INPUT'
   | 'READ_FAILED';
 
 export type KeyClassResult =
@@ -75,7 +82,7 @@ export type KeyClassResult =
 const fail = (status: number, code: KeyClassFailureCode, message: string): KeyClassResult => ({ ok: false, status, code, message });
 
 /** The node name a system key belongs to: SUBSTRATE_NAME (bootstrap identity), or null. */
-function nodeName(): string | null {
+export function nodeName(): string | null {
   const n = (process.env.SUBSTRATE_NAME ?? '').trim();
   return n.length > 0 ? n : null;
 }
@@ -93,33 +100,47 @@ export function entryFromRow(row: Record<string, unknown>, node: string | null):
   const scopes = Array.isArray(row.scopes) ? row.scopes : [];
   return {
     key_id_mask12: id.slice(0, 12),
+    row_mask8: recordIdOf(row).slice(0, 8).replace(/[^A-Za-z0-9_:-]/g, '?') || '-',
     owner_kind,
     owner_node: owner_kind === 'system' ? node : owner_kind === 'peer' ? peerNode(row.owner_node) : null,
     is_admin: scopes.includes('admin'),
   };
 }
 
-/** Resolve apiKeyClass for the caller presenting `authHeader`. */
-export async function readKeyClass(authHeader: string | undefined): Promise<KeyClassResult> {
-  if (!authHeader) return fail(401, 'MISSING_AUTH_HEADER', 'Missing Authorization header');
+export type ServiceCaller = { ok: true; orgId: string } | { ok: false; status: number; code: KeyClassFailureCode; message: string };
+
+/**
+ * The org of a service ApiKey caller, for a read of the org's own key facts (apiKeyClass, keyAnswer): a valid,
+ * unrevoked ApiKey that names an org. A Bearer token (a user session, an on-behalf-of token) is refused.
+ */
+export async function serviceCallerOrg(authHeader: string | undefined, shape: string): Promise<ServiceCaller> {
+  const no = (status: number, code: KeyClassFailureCode, message: string): ServiceCaller => ({ ok: false, status, code, message });
+  if (!authHeader) return no(401, 'MISSING_AUTH_HEADER', 'Missing Authorization header');
   if (authHeader.startsWith('Bearer ')) {
-    return fail(403, 'FORBIDDEN', 'apiKeyClass is read with a service ApiKey, not a session token');
+    return no(403, 'FORBIDDEN', `${shape} is read with a service ApiKey, not a session token`);
   }
   if (!authHeader.startsWith('ApiKey ')) {
-    return fail(401, 'INVALID_AUTH_SCHEME', 'Authorization must start with "ApiKey "');
+    return no(401, 'INVALID_AUTH_SCHEME', 'Authorization must start with "ApiKey "');
   }
   const validation = await validateKey(authHeader.slice('ApiKey '.length));
-  if (!validation.valid) return fail(401, 'INVALID_API_KEY', 'Invalid API key');
+  if (!validation.valid) return no(401, 'INVALID_API_KEY', 'Invalid API key');
   if (validation.keyId && (await isKeyRevoked(validation.keyId))) {
-    return fail(401, 'REVOKED_API_KEY', 'API key has been revoked');
+    return no(401, 'REVOKED_API_KEY', 'API key has been revoked');
   }
-  if (!validation.orgId) return fail(403, 'FORBIDDEN', 'The API key names no org');
+  if (!validation.orgId) return no(403, 'FORBIDDEN', 'The API key names no org');
+  return { ok: true, orgId: validation.orgId };
+}
+
+/** Resolve apiKeyClass for the caller presenting `authHeader`. */
+export async function readKeyClass(authHeader: string | undefined): Promise<KeyClassResult> {
+  const caller = await serviceCallerOrg(authHeader, API_KEY_CLASS_SHAPE);
+  if (!caller.ok) return caller;
 
   let rows: unknown;
   try {
     const query = await getQueryFn();
     // Never key_hash: the read selects only what the class is derived from.
-    rows = await query('SELECT key_id, name, scopes, owner_kind, owner_node FROM api_key WHERE org_id = $org_id;', { org_id: validation.orgId });
+    rows = await query('SELECT id, key_id, name, scopes, owner_kind, owner_node FROM api_key WHERE org_id = $org_id;', { org_id: caller.orgId });
   } catch {
     return fail(500, 'READ_FAILED', 'Could not read the key class map');
   }

@@ -88,6 +88,7 @@ import { config } from './services/config';
 import { issueApiKey, authorizeAdmin, bindKeyTarget, isIssueKeyFailure } from './resolvers/issue-key';
 import { grantKeyScopes, API_KEY_WRITE_SHAPE } from './resolvers/grant-scope';
 import { readKeyClass, API_KEY_CLASS_SHAPE } from './resolvers/key-class';
+import { readKeyAnswer, KEY_ANSWER_SHAPE } from './resolvers/key-answer';
 import { bootstrapAdminKey } from './resolvers/bootstrap-admin';
 import { loginWithPassword, signupWithPassword } from './resolvers/login';
 import { z } from 'zod';
@@ -186,6 +187,12 @@ app.get('/capabilities', (c) => {
       {
         type: 'apiKeyClass',
         description: "Service-key read: each of the caller org's keys by a 12-character id mask, with its owner_kind, owner_node and is_admin",
+        avgLatency: 5,
+        cost: 0.0001
+      },
+      {
+        type: 'keyAnswer',
+        description: "Service-key read: the last answer this identity gave for each of the caller org's keys (branch, how its row was found, the row, the stored and answered class), with this node and when it started holding answers",
         avgLatency: 5,
         cost: 0.0001
       }
@@ -306,6 +313,18 @@ app.post('/v1/auth/resolve', createRateLimitMiddleware('auth_resolve', 100, buck
         return c.json({ success: false, error: { code: read.code, message: read.message } }, read.status as any);
       }
       return c.json({ success: true, data: { keys: read.keys } });
+    }
+
+    // Branch 0c: the keyAnswer impulse — the last answer this identity gave for each of the caller org's keys, for a
+    // service ApiKey caller only. See resolvers/key-answer.ts.
+    if (body?.impulse?.pointer?.type === KEY_ANSWER_SHAPE
+        && (body.impulse.type === undefined || body.impulse.type === KEY_ANSWER_SHAPE)) {
+      const read = await readKeyAnswer(c.req.header('Authorization'), body.impulse.pointer);
+      if (!read.ok) {
+        return c.json({ success: false, error: { code: read.code, message: read.message } }, read.status as any);
+      }
+      const { ok: _ok, ...data } = read;
+      return c.json({ success: true, data });
     }
 
     // Branch 1: nested impulse form — body has an `impulse` field.
