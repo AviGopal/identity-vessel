@@ -24,6 +24,10 @@ import { validateKey, setQueryFn } from './validation';
 import { generateApiKey } from './keyGeneration';
 import { resolveAuthentication } from '../resolvers/auth';
 import { __resetAnswerLogForTests, logOboMint } from './answer-log';
+import { mintOnBehalfOf } from './obo';
+import { join } from 'node:path';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 const PLANTED_PREFIX = 'plantedprefixvaluethatmustneverprint';
 let lines: string[] = [];
@@ -128,15 +132,69 @@ describe('legacy branch', () => {
     expect(answers().at(-1)).toBe('[KeyAnswer] branch=legacy key=- found_by=none row=- owner_kind=- answered=none');
     legacyRows = [{ id: 'api_key:legacyrow', key_id: 'key_legacykeyidvalue', is_active: false, owner_kind: 'person' }];
     await resolveAuthentication({ type: 'authentication', pointer: { type: 'apiKey', apiKey: oldKey } } as any);
-    expect(answers().at(-1)).toContain('answered=inactive');
+    expect(answers().at(-1)).toBe('[KeyAnswer] branch=legacy key=key_legacyke found_by=key_prefix row=legacyro owner_kind=person answered=inactive');
     legacyRows = new Error('down');
     await resolveAuthentication({ type: 'authentication', pointer: { type: 'apiKey', apiKey: oldKey } } as any);
     expect(answers().at(-1)).toContain('branch=legacy key=- found_by=error');
-    for (const l of lines) expect(l).not.toContain(oldKey);
+    for (const l of lines) expect(l).not.toContain(oldKey.slice(0, 8));
+  });
+});
+
+describe('delegated branch', () => {
+  // validation.ts reads its secret and trusted issuers when it loads, so a key from a trusted foreign issuer is
+  // validated in a process of its own, with those set and the issuer's answer stubbed.
+  test('a key its issuer validated is said as delegated, found by the issuer, with no class; a newline cannot forge a line', () => {
+    const script = `
+      const lines = [];
+      console.log = (...a) => lines.push(a.map(String).join(' '));
+      const { createHmac } = await import('node:crypto');
+      const iss = 'https://issuer.test';
+      const payload = 'organizations:alpha-users:one-key_foreignkeyidvalue-' + iss;
+      const fin = 'mb-' + Buffer.from(payload).toString('base64url');
+      const key = fin + '-' + createHmac('sha256', 'anotherissuersecretvalue').update(fin).digest('hex').slice(0, 32);
+      let keyId = 'key_foreignkeyidvalue';
+      globalThis.fetch = async () => new Response(JSON.stringify({ success: true, data: { valid: true, org_id: 'organizations:alpha', user_id: 'users:one', key_id: keyId } }));
+      const { validateKey } = await import(${JSON.stringify(join(import.meta.dir, 'validation.ts'))});
+      const a = await validateKey(key);
+      keyId = 'key_x\\n[KeyAnswer] forged';
+      await validateKey(key);
+      process.stdout.write(JSON.stringify({ valid: a.valid, ownerKind: a.ownerKind ?? null, lines }));
+    `;
+    const dir = mkdtempSync(join(tmpdir(), 'answer-log-delegated-'));
+    const file = join(dir, 'run.ts');
+    writeFileSync(file, script);
+    const r = Bun.spawnSync([process.execPath, file], {
+      env: { ...process.env, API_KEY_SECRET: 'thisnodesownsecretvalue', IDENTITY_ENDPOINT: 'http://127.0.0.1:8101', TRUSTED_ISSUERS: 'https://issuer.test' },
+    });
+    rmSync(dir, { recursive: true, force: true });
+    expect(r.stderr.toString()).toBe('');
+    const out = JSON.parse(r.stdout.toString()) as { valid: boolean; ownerKind: string | null; lines: string[] };
+    expect(out.valid).toBe(true);
+    expect(out.ownerKind).toBeNull();
+    const said = out.lines.filter((l) => l.startsWith('[KeyAnswer]'));
+    expect(said[0]).toBe('[KeyAnswer] branch=delegated key=key_foreignk found_by=issuer row=- owner_kind=- answered=none');
+    expect(said[1]).toBe('[KeyAnswer] branch=delegated key=key_x??KeyAn found_by=issuer row=- owner_kind=- answered=none');
+    expect(out.lines.join('\n').split('\n').filter((l) => l.startsWith('[KeyAnswer] forged'))).toEqual([]);
   });
 });
 
 describe('on-behalf-of mint', () => {
+  test('mintOnBehalfOf says the class the token carries, through its own call', async () => {
+    const actor = minted();
+    const caller = minted();
+    setQueryFn(async (_sql, params) => [{ id: 'api_key:rowfor', key_id: params?.key_id, scopes: ['read', 'write'], name: 'n', owner_kind: params?.key_id === caller.keyId ? 'person' : 'system' }]);
+    const r = await mintOnBehalfOf(`ApiKey ${actor.key}`, `ApiKey ${caller.key}`, { node: 'nodeA', shape: 'record_write' });
+    expect('token' in r).toBe(true);
+    expect(lines.filter((l) => l.startsWith('[OboMint]'))).toEqual([
+      `[OboMint] caller=api_key key=${caller.keyId.slice(0, 12)} carries=person audience=nodeA/record_write`,
+    ]);
+  });
+
+  test('a node or shape holding a newline prints it as ?, so no line can be forged', () => {
+    logOboMint({ scheme: 'session', keyId: undefined, ownerKind: undefined, node: 'n\n[OboMint] x', shape: 's' });
+    expect(lines).toEqual(['[OboMint] caller=session key=- carries=none audience=n??OboMint??x/s']);
+  });
+
   test('the class a token carries is said once per caller and audience', () => {
     logOboMint({ scheme: 'api_key', keyId: 'key_callerkeyidvalue', ownerKind: 'person', node: 'nodeA', shape: 'record_write' });
     logOboMint({ scheme: 'api_key', keyId: 'key_callerkeyidvalue', ownerKind: 'person', node: 'nodeA', shape: 'record_write' });

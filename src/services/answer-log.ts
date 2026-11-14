@@ -62,8 +62,10 @@ export function logKeyAnswer(a: {
 
 /** The class an on-behalf-of token carries, said once per caller and audience while it stays the same. */
 export function logOboMint(a: { scheme: 'api_key' | 'session'; keyId: string | undefined; ownerKind: string | undefined; node: string; shape: string }): void {
-  const line = `caller=${a.scheme} key=${head(a.keyId, 12)} carries=${a.ownerKind ?? 'none'} audience=${head(a.node, 16)}/${head(a.shape, 40)}`;
-  const k = `obo ${a.scheme} ${a.keyId ?? '-'} ${a.node} ${a.shape}`;
+  const audience = `${head(a.node, 16)}/${head(a.shape, 40)}`;
+  const line = `caller=${a.scheme} key=${head(a.keyId, 12)} carries=${head(a.ownerKind, 16) === '-' ? 'none' : head(a.ownerKind, 16)} audience=${audience}`;
+  // Keyed by what is printed, so a caller's long node or shape strings cannot grow the map past what a line can say.
+  const k = `obo ${a.scheme} ${a.keyId ?? '-'} ${audience}`;
   if (said.get(k) === line) return;
   said.set(k, line);
   console.log(`[OboMint] ${line}`);
